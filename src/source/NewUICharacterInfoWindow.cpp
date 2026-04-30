@@ -16,6 +16,7 @@
 #include "UIJewelHarmony.h"
 #include "UIManager.h"
 #include "ServerListManager.h"
+#include "NewUICustomMessageBox.h"
 
 using namespace SEASON3B;
 
@@ -184,7 +185,15 @@ bool SEASON3B::CNewUICharacterInfoWindow::BtnProcess()
         {
             if (m_BtnStat[i].UpdateMouseEvent() == true)
             {
-                SocketClient->ToGameServer()->SendIncreaseCharacterStatPoint(static_cast<CharacterStatAttribute>(i));
+                auto* lpMsgBox = (SEASON3B::CEnterStatPointValueMsgBoxLayout*)SEASON3B::CreateMessageBox(
+                    MSGBOX_LAYOUT_CLASS(SEASON3B::CEnterStatPointValueMsgBoxLayout)
+                );
+
+                if (lpMsgBox)
+                {
+                    lpMsgBox->SetStatType(i);
+                }
+                /*SocketClient->ToGameServer()->SendIncreaseCharacterStatPoint(static_cast<CharacterStatAttribute>(i));*/
                 PlayBuffer(SOUND_CLICK01);
                 return true;
             }

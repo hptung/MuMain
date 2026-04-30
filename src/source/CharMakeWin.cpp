@@ -296,8 +296,8 @@ void CCharMakeWin::UpdateDisplay()
 #ifdef PBG_ADD_CHARACTERCARD
     for (int i = 0; i < CLASS_CHARACTERCARD_TOTALCNT; ++i)
     {
-        if (!g_CharCardEnable.bCharacterEnable[i])
-            m_abtnJob[i + CLASS_DARK].SetEnable(false);
+        /*if (!g_CharCardEnable.bCharacterEnable[i])
+            m_abtnJob[i + CLASS_DARK].SetEnable(false);*/
     }
 #else //PBG_ADD_CHARACTERCARD
     m_abtnJob[CLASS_SUMMONER].SetEnable(true);

@@ -92,6 +92,19 @@ namespace SEASON3B
 
     private:
         WORD m_password;
+
+    private:
+        bool m_bUseLimit;
+        int m_MinNumber;
+        int m_MaxNumber;
+
+    public:
+        void EnableNumberLimit(bool enable) { m_bUseLimit = enable; }
+        void SetMinNumber(int v) { m_MinNumber = v; }
+        void SetMaxNumber(int v) { m_MaxNumber = v; }
+
+    private:
+        void ValidateNumber();
     };
 
     class CNewUIKeyPadButton : public CNewUIMessageBoxButton
@@ -1065,6 +1078,22 @@ namespace SEASON3B
         static CALLBACK_RESULT OkBtnDown(class CNewUIMessageBoxBase* pOwner, const leaf::xstreambuf& xParam);
         static CALLBACK_RESULT CancelBtnDown(class CNewUIMessageBoxBase* pOwner, const leaf::xstreambuf& xParam);
 
+    private:
+        static CALLBACK_RESULT ProcessOk(class CNewUIMessageBoxBase* pOwner, const leaf::xstreambuf& xParam);
+    };
+
+    class CEnterStatPointValueMsgBoxLayout : public TMsgBoxLayout<CNewUITextInputMsgBox>
+    {
+    public:
+        static void SetStatType(int type) { m_StatType = type; }
+
+    private:
+        static int m_StatType;
+    public:
+        bool SetLayout();
+        static CALLBACK_RESULT ReturnDown(class CNewUIMessageBoxBase* pOwner, const leaf::xstreambuf& xParam);
+        static CALLBACK_RESULT OkBtnDown(class CNewUIMessageBoxBase* pOwner, const leaf::xstreambuf& xParam);
+        static CALLBACK_RESULT CancelBtnDown(class CNewUIMessageBoxBase* pOwner, const leaf::xstreambuf& xParam);
     private:
         static CALLBACK_RESULT ProcessOk(class CNewUIMessageBoxBase* pOwner, const leaf::xstreambuf& xParam);
     };
