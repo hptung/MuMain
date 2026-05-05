@@ -24,6 +24,7 @@
 #include "Event.h"
 #include "ChangeRingManager.h"
 #include "NewUISystem.h"
+#include "NewUIHelpWindow.h"
 #include "CameraMove.h"
 #include "QuestMng.h"
 #include "ServerListManager.h"
@@ -4718,8 +4719,6 @@ void OpenSounds()
     LoadWaveFile(SOUND_RAGESKILL_BUFF_2, L"Data\\Sound\\Ragefighter\\Rage_Buff_2.wav");
 }
 
-extern int	g_iRenderTextType;
-
 bool OpenFont()
 {
     InitPath();
@@ -4728,18 +4727,7 @@ bool OpenFont()
     LoadBitmap(L"Interface\\FontTest.tga", BITMAP_FONT + 1);
     LoadBitmap(L"Interface\\Hit.tga", BITMAP_FONT_HIT, GL_NEAREST, GL_CLAMP_TO_EDGE);
 
-    const int requestedType = g_iRenderTextType;
-    if (!g_pRenderText->Create(requestedType, g_hDC))
-    {
-        if (requestedType == 0 || !g_pRenderText->Create(0, g_hDC))
-        {
-            return false;
-        }
-
-        g_iRenderTextType = 0;
-    }
-
-    return true;
+    return g_pRenderText->Create(g_hDC);
 }
 
 void SaveMacro(const wchar_t* FileName)
@@ -5434,6 +5422,7 @@ void OpenTextData()
 
     mu_swprintf(Text, L"Data\\Local\\%ls\\Text_%ls.bmd", g_strSelectedML.c_str(), g_strSelectedML.c_str());
     GlobalText.Load(Text, CGlobalText::LD_USA_CANADA_TEXTS | CGlobalText::LD_FOREIGN_TEXTS);
+    SEASON3B::RegisterCustomHelpText();
     OpenMacro(L"Data\\Macro.txt");
 }
 

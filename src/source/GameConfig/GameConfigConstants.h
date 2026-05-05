@@ -17,10 +17,6 @@ namespace CfgKeys
     inline constexpr wchar_t CfgKeyHeight[]     = L"Height";
     inline constexpr wchar_t CfgKeyWindowed[]   = L"Windowed";
 
-    // Graphics
-    inline constexpr wchar_t CfgKeyColorDepth[]     = L"ColorDepth";
-    inline constexpr wchar_t CfgKeyRenderTextType[] = L"RenderTextType";
-
     // Audio — volume 0 = off, >0 = on (no separate Enabled flag).
     inline constexpr wchar_t CfgKeySoundVolume[]  = L"SoundVolume";
     inline constexpr wchar_t CfgKeyMusicVolume[] = L"MusicVolume";
@@ -45,12 +41,8 @@ namespace CfgDefaults
     inline constexpr int  CfgDefaultWindowHeight = 768;
     inline constexpr bool CfgDefaultWindowed     = true;
 
-    inline constexpr int  CfgDefaultColorDepth = 0;
-
     inline constexpr int  CfgDefaultSoundVolume = 5;
     inline constexpr int  CfgDefaultMusicVolume = 5;
-
-    inline constexpr int CfgDefaultRenderTextType = 0;
 
     inline constexpr bool CfgDefaultRememberMe = false;
     inline constexpr wchar_t CfgDefaultLanguage[] = L"Eng";
@@ -60,5 +52,5 @@ namespace CfgDefaults
     inline constexpr wchar_t CfgDefaultServerIP[] = L"127.127.127.127";
     inline constexpr int CfgDefaultServerPort = 44406;
 
-    inline constexpr int CfgDefaultZoom = 1100;  // OrbitalCamera DEFAULT_RADIUS
+    inline constexpr int CfgDefaultZoom = 1735;  // OrbitalCamera DEFAULT_RADIUS — matches Default-cam camera-to-Hero distance
 }

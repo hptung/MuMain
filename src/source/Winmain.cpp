@@ -34,6 +34,7 @@
 #include "./Utilities/CpuUsage.h"
 
 #include "MUHelper/MuHelper.h"
+#include "Camera/CameraManager.h"
 
 #include "CBTMessageBox.h"
 #include "./ExternalObject/Leaf/regkey.h"
@@ -469,6 +470,17 @@ extern bool EnableFastInput;
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    // F10 zoom-lock toggle. Handled before the ImGui forwarder so editor-open
+    // sessions still get the toggle (ImGui captures keyboard messages while a
+    // window has focus). Bit 30 of lParam = previous key state — skip
+    // auto-repeat ticks so a held key only toggles once.
+    constexpr LPARAM PREVIOUS_KEY_STATE_MASK = 1 << 30;
+    if (msg == WM_SYSKEYDOWN && wParam == VK_F10 && (lParam & PREVIOUS_KEY_STATE_MASK) == 0)
+    {
+        CameraManager::Instance().ToggleZoomLock();
+        return 0;
+    }
+
 #ifdef _EDITOR
     // Only forward messages to ImGui when editor is open
     // When editor is closed, we handle button clicks manually in RenderToolbarOpen
@@ -483,6 +495,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
     case WM_SYSKEYDOWN:
     {
+        // F10 is handled above (intercepted before ImGui). Other system keys
+        // are silenced here — returning 0 prevents the OS menu activation.
         return 0;
     }
     break;
@@ -760,9 +774,7 @@ wchar_t m_ExeVersion[11];
 int  m_SoundOnOff;
 int  m_MusicOnOff;
 int  m_Resolution;
-int	m_nColorDepth;
 int m_RememberMe;
-int	g_iRenderTextType = 0;
 
 wchar_t g_aszMLSelection[MAX_LANGUAGE_NAME_LENGTH] = { '\0' };
 
@@ -969,10 +981,6 @@ MSG MainLoop()
     return msg;
 }
 
-// Declared at file scope -- an `extern` inside the anonymous namespace below would
-// give the symbol internal linkage and fail to resolve against the real global.
-extern int g_iRenderTextType;
-
 namespace
 {
     // Tahoma font size scales with window height; these are the tuned base values.
@@ -1012,7 +1020,7 @@ namespace
     {
         // Recreates the font buffer bitmap with new g_fScreenRate values
         g_pRenderText->Release();
-        g_pRenderText->Create(g_iRenderTextType, g_hDC);
+        g_pRenderText->Create(g_hDC);
         g_pRenderText->SetFont(g_hFont);
     }
 
@@ -1199,7 +1207,6 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
     m_SoundOnOff = 1;
     m_MusicOnOff = 1;
     m_Resolution = 0;
-    m_nColorDepth = 0;
     m_RememberMe = 0;
 
     g_iChatInputType = 1;
@@ -1213,10 +1220,6 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
     // Apply audio settings from INI — volume 0 = off, >0 = on
     m_SoundOnOff = (GameConfig::GetInstance().GetSoundVolume() > 0) ? 1 : 0;
     m_MusicOnOff = (GameConfig::GetInstance().GetMusicVolume() > 0) ? 1 : 0;
-
-    // Apply graphics settings from INI
-    m_nColorDepth = GameConfig::GetInstance().GetColorDepth();
-    g_iRenderTextType = GameConfig::GetInstance().GetRenderTextType();
 
     // Apply login settings from INI
     m_RememberMe = GameConfig::GetInstance().GetRememberMe() ? 1 : 0;
@@ -1238,36 +1241,10 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
     if (g_iChatInputType == 1)
         ShowCursor(FALSE);
 
-    g_ErrorReport.Write(L"> Enum display settings.\r\n");
-    DEVMODE DevMode;
-    DEVMODE* pDevmodes;
-    int nModes = 0;
-    while (EnumDisplaySettings(nullptr, nModes, &DevMode)) nModes++;
-    pDevmodes = new DEVMODE[nModes + 1];
-    nModes = 0;
-    while (EnumDisplaySettings(nullptr, nModes, &pDevmodes[nModes])) nModes++;
-
-    DWORD dwBitsPerPel = 16;
-    for (int n1 = 0; n1 < nModes; n1++)
-    {
-        if (pDevmodes[n1].dmBitsPerPel == 16 && m_nColorDepth == 0) {
-            dwBitsPerPel = 16; break;
-        }
-        if (pDevmodes[n1].dmBitsPerPel == 24 && m_nColorDepth == 1) {
-            dwBitsPerPel = 24; break;
-        }
-        if (pDevmodes[n1].dmBitsPerPel == 32 && m_nColorDepth == 1) {
-            dwBitsPerPel = 32; break;
-        }
-    }
-
     if (g_bUseWindowMode == FALSE && g_bUseFullscreenMode == TRUE)
     {
-        // Force an exclusive fullscreen mode change at WindowWidth × WindowHeight.
-        // The old path iterated EnumDisplaySettings looking for a match at dwBitsPerPel
-        // (which defaulted to 16), but modern displays don't expose <32bpp modes — so
-        // the loop matched nothing, ChangeDisplaySettings was never called, and the
-        // game ended up as a small popup on top of the desktop instead of true fullscreen.
+        // Force an exclusive fullscreen mode change at WindowWidth × WindowHeight
+        // at the desktop's bit depth — modern displays don't expose <32bpp modes.
         DEVMODE dmScreenSettings = {};
         dmScreenSettings.dmSize       = sizeof(dmScreenSettings);
         dmScreenSettings.dmPelsWidth  = WindowWidth;
@@ -1287,8 +1264,6 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR szCmdLin
             g_bUseFullscreenMode = FALSE;
         }
     }
-
-    delete[] pDevmodes;
 
     g_ErrorReport.Write(L"> Screen size = %d x %d.\r\n", WindowWidth, WindowHeight);
 
