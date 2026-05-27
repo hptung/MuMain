@@ -26,7 +26,9 @@
 #pragma warning( disable : 28159 )
 #pragma warning( disable : 26812 )
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 
 // Exclude rarely-used stuff from Windows headers
 #define WIN32_LEAN_AND_MEAN
@@ -128,20 +130,20 @@
 
 //patch
 //winmain
-#include "Winmain.h"
-#include "Defined_Global.h"
+#include "Platform/Windows/Winmain.h"
+#include "Core/Globals/Defined_Global.h"
 
 //client
-#include "_define.h"
-#include "_enum.h"
-#include "_types.h"
-#include "_struct.h"
-#include "w_WindowMessageHandler.h"
-#include "_GlobalFunctions.h"
-#include "_TextureIndex.h"
-#include "UIDefaultBase.h"
-#include "NewUICommon.h"
-#include "./Math/ZzzMathLib.h"
+#include "Core/Globals/_define.h"
+#include "Core/Globals/_enum.h"
+#include "Core/Globals/_types.h"
+#include "Core/Globals/_struct.h"
+#include "Platform/Windows/w_WindowMessageHandler.h"
+#include "Core/Utilities/_GlobalFunctions.h"
+#include "Core/Globals/_TextureIndex.h"
+#include "UI/Legacy/UIDefaultBase.h"
+#include "UI/NewUI/NewUICommon.h"
+#include "Core/Math/ZzzMathLib.h"
 
 // Reference resolution -- all UI coordinates and screen-space math use this as the base.
 // Must be declared BEFORE ZzzOpenglUtil.h because BeginOpengl() uses them as default args.
@@ -149,23 +151,23 @@
 inline constexpr int REFERENCE_WIDTH = 640;
 inline constexpr int REFERENCE_HEIGHT = 480;
 
-#include "ZzzOpenglUtil.h"
+#include "Render/Textures/ZzzOpenglUtil.h"
 
-#include "MultiLanguage.h"
+#include "Data/Translation/MultiLanguage.h"
 
 
-#include "./Utilities/Log/muConsoleDebug.h"
-#include "./Utilities/Log/ErrorReport.h"
-#include "./Utilities/Log/WindowsConsole.h"
+#include "Core/Utilities/Log/muConsoleDebug.h"
+#include "Core/Utilities/Log/ErrorReport.h"
+#include "Core/Utilities/Log/WindowsConsole.h"
 
 // Redirect console output to ImGui when editor is enabled
 #ifdef _EDITOR
 #include "../MuEditor/UI/Console/MuEditorConsoleRedirectUI.h"
 #endif
 
-#include "w_MapHeaders.h"
+#include "World/MapInfra/w_MapHeaders.h"
 
-#include "_crypt.h"
+#include "Core/Globals/_crypt.h"
 
 inline std::wstring g_strSelectedML = L"";
 // Scale factors from REFERENCE_WIDTH/HEIGHT (above) to the actual window size.

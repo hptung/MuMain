@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <numeric>
 #include "SceneManager.h"
-#include "../Utilities/FrameProfiler.h"
+#include "Core/Utilities/FrameProfiler.h"
 
 //=============================================================================
 // Frame Timing State Implementation
@@ -25,22 +25,22 @@ FrameTimingState g_frameTiming;
 #include "CharacterScene.h"
 #include "MainScene.h"
 #include "LoadingScene.h"
-#include "../DSPlaySound.h"
-#include "../ZzzOpenglUtil.h"
-#include "../PhysicsManager.h"
-#include "../Time/Timer.h"
-#include "../Input.h"
-#include "../UIMng.h"
-#include "../WSclient.h"
-#include "../w_CursedTemple.h"
-#include "../ServerListManager.h"
-#include "../NewUISystem.h"
-#include "../ZzzInterface.h"
-#include "../GlobalText.h"
-#include "../ZzzAI.h"
-#include "../Winmain.h"
-#include "../Camera/CameraManager.h"
-#include "../Camera/CameraMode.h"
+#include "Audio/DSPlaySound.h"
+#include "Render/Textures/ZzzOpenglUtil.h"
+#include "Engine/Physics/PhysicsManager.h"
+#include "Core/Time/Timer.h"
+#include "Core/Input/Input.h"
+#include "UI/Legacy/UIMng.h"
+#include "Network/Server/WSclient.h"
+#include "GameLogic/Events/w_CursedTemple.h"
+#include "Network/Server/ServerListManager.h"
+#include "UI/NewUI/NewUISystem.h"
+#include "Engine/Object/ZzzInterface.h"
+#include "I18N/All.h"
+#include "Engine/AI/ZzzAI.h"
+#include "Platform/Windows/Winmain.h"
+#include "Camera/CameraManager.h"
+#include "Camera/CameraMode.h"
 
 #ifdef _EDITOR
 #include "../MuEditor/Core/MuEditorCore.h"
@@ -195,7 +195,7 @@ static void GenerateScreenshotFilename(wchar_t* outFileName, wchar_t* outMessage
     GetLocalTime(&st);
     swprintf(outFileName, L"Screen(%02d_%02d-%02d_%02d)-%04d.jpg",
         st.wMonth, st.wDay, st.wHour, st.wMinute, GrabScreen);
-    swprintf(outMessage, GlobalText[459], outFileName);
+    swprintf(outMessage, I18N::Game::SScreenshotSaved, outFileName);
 
     wchar_t lpszTemp[64];
     swprintf(lpszTemp, L" [%ls / %ls]", g_ServerListManager->GetSelectServerName(), Hero->ID);

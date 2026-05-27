@@ -2,71 +2,48 @@ cmake_minimum_required(VERSION 3.25)
 
 project(MuMain)
 
-# Initialize imgui submodule automatically if missing
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/imgui.cpp")
-  find_package(Git QUIET)
-  if(NOT GIT_FOUND)
-    message(FATAL_ERROR "Git not found. Please run 'git submodule update --init' manually from repository root.")
-  endif()
+# Repository root (parent of this src/ directory). Defined here so all
+# sibling-directory references (cmake/, ClientLibrary/, etc.) have a
+# single, stable anchor instead of scattered "../" navigations.
+cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH REPO_ROOT)
 
-  message(STATUS "Initializing imgui submodule...")
+include("${REPO_ROOT}/cmake/EnsureSubmodule.cmake")
 
-  # Get repository root (parent of src/)
-  cmake_path(GET CMAKE_CURRENT_SOURCE_DIR PARENT_PATH REPO_ROOT)
+mu_ensure_submodule("ThirdParty/SDL"
+  INDICATOR "CMakeLists.txt"
+  URL "https://github.com/libsdl-org/SDL.git")
 
-  # If directory exists but is incomplete, remove it first
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui")
-    message(STATUS "Removing incomplete imgui directory...")
-    file(REMOVE_RECURSE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui")
-  endif()
+mu_ensure_submodule("ThirdParty/SDL_mixer"
+  INDICATOR "CMakeLists.txt"
+  URL "https://github.com/libsdl-org/SDL_mixer.git")
 
-  # Check if submodule is registered in git index
-  execute_process(
-    COMMAND ${GIT_EXECUTABLE} ls-files -s src/ThirdParty/imgui
-    WORKING_DIRECTORY ${REPO_ROOT}
-    OUTPUT_VARIABLE SUBMODULE_IN_INDEX
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
+# SDL3 — static link, no tests, no install
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(ThirdParty/SDL EXCLUDE_FROM_ALL)
 
-  if(SUBMODULE_IN_INDEX STREQUAL "")
-    # Submodule not in index - need to add it
-    message(STATUS "Submodule not in git index, adding it...")
-    execute_process(
-      COMMAND ${GIT_EXECUTABLE} submodule add --force https://github.com/ocornut/imgui.git src/ThirdParty/imgui
-      WORKING_DIRECTORY ${REPO_ROOT}
-      RESULT_VARIABLE GIT_ADD_RESULT
-      ERROR_VARIABLE GIT_ADD_ERROR
-      OUTPUT_VARIABLE GIT_ADD_OUTPUT
-    )
-    if(NOT GIT_ADD_RESULT EQUAL "0")
-      message(FATAL_ERROR "Failed to add submodule:\n${GIT_ADD_ERROR}${GIT_ADD_OUTPUT}")
-    endif()
-  else()
-    # Submodule in index - just update it
-    execute_process(
-      COMMAND ${GIT_EXECUTABLE} submodule sync
-      WORKING_DIRECTORY ${REPO_ROOT}
-      OUTPUT_QUIET ERROR_QUIET
-    )
-    execute_process(
-      COMMAND ${GIT_EXECUTABLE} submodule update --init
-      WORKING_DIRECTORY ${REPO_ROOT}
-      RESULT_VARIABLE GIT_RESULT
-      ERROR_VARIABLE GIT_ERROR
-      OUTPUT_VARIABLE GIT_OUTPUT
-    )
-    if(NOT GIT_RESULT EQUAL "0")
-      message(FATAL_ERROR "Submodule initialization failed:\n${GIT_ERROR}${GIT_OUTPUT}")
-    endif()
-  endif()
-
-  message(STATUS "ImGui submodule initialized successfully")
-
-  # Verify it worked
-  if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/imgui.cpp")
-    message(FATAL_ERROR "ImGui submodule initialization appeared to succeed but imgui.cpp is still missing.")
-  endif()
-endif()
+# SDL3_mixer — static link, MP3 + Ogg Vorbis only (matches our music assets)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_INSTALL OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_VENDORED ON CACHE BOOL "" FORCE)
+set(SDLMIXER_SAMPLES OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_MP3 ON CACHE BOOL "" FORCE)
+set(SDLMIXER_MP3_DRMP3 ON CACHE BOOL "" FORCE)
+# mpg123 is built as a dynamically loaded library — drmp3 alone is enough
+# for the assets we ship and keeps everything statically linked.
+set(SDLMIXER_MP3_MPG123 OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_VORBIS_STB ON CACHE BOOL "" FORCE)
+set(SDLMIXER_VORBIS_VORBISFILE OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_FLAC OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_OPUS OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_WAVPACK OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_MOD OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_MIDI OFF CACHE BOOL "" FORCE)
+set(SDLMIXER_GME OFF CACHE BOOL "" FORCE)
+add_subdirectory(ThirdParty/SDL_mixer EXCLUDE_FROM_ALL)
 
 # Determine architecture if CMAKE_SIZEOF_VOID_P isn't set
 if (NOT DEFINED CMAKE_SIZEOF_VOID_P OR CMAKE_SIZEOF_VOID_P EQUAL 0)
@@ -118,6 +95,10 @@ endif()
 
 # ImGui static library (required when editor is enabled)
 if(ENABLE_EDITOR)
+  mu_ensure_submodule("ThirdParty/imgui"
+    INDICATOR "imgui.cpp"
+    URL "https://github.com/ocornut/imgui.git")
+
   add_library(imgui STATIC
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/imgui.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/imgui_draw.cpp"
@@ -160,7 +141,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
 
   enable_language(RC)
   target_sources(Main PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/source/resource.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/source/Platform/Windows/resource.rc"
   )
 endif()
 
@@ -193,6 +174,18 @@ add_custom_command(
 )
 add_custom_target(CopyAssets DEPENDS "${ASSETS_STAMP}")
 add_dependencies(Main CopyAssets)
+
+# Seed config.ini from the template only when it doesn't already exist
+# next to the executable. The bulk asset copy ships config.ini.template
+# into the build dir on every build; this step turns it into config.ini
+# the first time and then leaves the user's edited copy alone forever.
+add_custom_command(TARGET Main POST_BUILD
+  COMMAND "${CMAKE_COMMAND}"
+    "-DINPUT=${ASSETS_DIR}/config.ini.template"
+    "-DOUTPUT=$<TARGET_FILE_DIR:Main>/config.ini"
+    "-P" "${REPO_ROOT}/cmake/SeedConfigIfMissing.cmake"
+  VERBATIM
+)
 
 # Skeleton Linux-native linkage. This intentionally depends only on
 # ubiquitous system libraries so we can focus on getting the project to
@@ -258,12 +251,11 @@ if (MSVC)
     wininet
     urlmon
     turbojpeg-static
-    wzAudio
   )
 
   # Locate required DLLs in bin directory
   set(DLL_SEARCH_PATH "${CMAKE_CURRENT_SOURCE_DIR}/bin")
-  set(REQUIRED_DLL_NAMES wzAudio glew32 ogg vorbisfile)
+  set(REQUIRED_DLL_NAMES glew32 ogg vorbisfile)
   set(REQUIRED_DLLS)
 
   foreach(DLL_NAME IN LISTS REQUIRED_DLL_NAMES)
@@ -295,14 +287,17 @@ if (NOT DOTNET_EXECUTABLE)
   find_program(DOTNET_EXECUTABLE dotnet)
 endif()
 if (DOTNET_EXECUTABLE)
-  # Native AOT cannot cross-compile across OS boundaries.  A Linux dotnet
-  # targeting win-x86/win-x64 will fail.  Only proceed when we have a Windows
-  # dotnet.exe (native or via WSL interop).
+  # Native AOT can't cross-compile across OS boundaries: a Linux dotnet
+  # targeting win-x86/win-x64 will fail at publish time. Build-time C#
+  # tools that emit C++ source (ConstantsReplacer, ResxGen) are unaffected
+  # and only need a working dotnet on the host - so gate the ClientLibrary
+  # step separately rather than clearing DOTNET_EXECUTABLE altogether.
+  set(DOTNET_CAN_BUILD_CLIENT_LIBRARY TRUE)
   if (NOT DOTNET_EXECUTABLE MATCHES "\\.exe$" AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
     message(WARNING "Found Linux dotnet but target is Windows. "
       "Cross-OS Native AOT is not supported. MUnique.Client.Library.dll will NOT be built. "
       "Install the Windows .NET SDK or use WSL interop (dotnet.exe) to enable.")
-    set(DOTNET_EXECUTABLE "")
+    set(DOTNET_CAN_BUILD_CLIENT_LIBRARY FALSE)
   endif()
 endif()
 if (DOTNET_EXECUTABLE)
@@ -365,36 +360,38 @@ if (DOTNET_EXECUTABLE)
     message(STATUS ".NET Client Library will build for x86 (CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P})")
   endif()
 
-  add_custom_command(
-          OUTPUT "${DOTNET_DLL_PATH}"
-          COMMAND ${CMAKE_COMMAND} -E echo "--- C# Changes Detected: Rebuilding Client Library ---"
-          COMMAND ${CMAKE_COMMAND} -E env
-                  "NUGET_PACKAGES=${DOTNET_NUGET_DIR_NATIVE}"
-                  "DOTNET_CLI_HOME=${DOTNET_TEMP_DIR_NATIVE}"
-                  "TEMP=${DOTNET_TEMP_DIR_NATIVE}"
-                  "TMP=${DOTNET_TEMP_DIR_NATIVE}"
-                  "${DOTNET_EXECUTABLE}" publish "${DOTNET_PROJ_NATIVE}" -c $<CONFIG> -r ${DOTNET_RID} -p:PlatformTarget=${DOTNET_PLATFORM} -o "${DOTNET_TEMP_OUTPUT_NATIVE}" --nologo
-          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DOTNET_TEMP_OUTPUT}/MUnique.Client.Library.dll" "${DOTNET_DLL_PATH}"
-          DEPENDS "${DOTNET_PROJ}" ${DOTNET_SOURCES}
-          COMMENT "Checking for .NET Client Library updates..."
-          VERBATIM
-  )
+  if (DOTNET_CAN_BUILD_CLIENT_LIBRARY)
+    add_custom_command(
+            OUTPUT "${DOTNET_DLL_PATH}"
+            COMMAND ${CMAKE_COMMAND} -E echo "--- C# Changes Detected: Rebuilding Client Library ---"
+            COMMAND ${CMAKE_COMMAND} -E env
+                    "NUGET_PACKAGES=${DOTNET_NUGET_DIR_NATIVE}"
+                    "DOTNET_CLI_HOME=${DOTNET_TEMP_DIR_NATIVE}"
+                    "TEMP=${DOTNET_TEMP_DIR_NATIVE}"
+                    "TMP=${DOTNET_TEMP_DIR_NATIVE}"
+                    "${DOTNET_EXECUTABLE}" publish "${DOTNET_PROJ_NATIVE}" -c $<CONFIG> -r ${DOTNET_RID} -p:PlatformTarget=${DOTNET_PLATFORM} -o "${DOTNET_TEMP_OUTPUT_NATIVE}" --nologo
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DOTNET_TEMP_OUTPUT}/MUnique.Client.Library.dll" "${DOTNET_DLL_PATH}"
+            DEPENDS "${DOTNET_PROJ}" ${DOTNET_SOURCES}
+            COMMENT "Checking for .NET Client Library updates..."
+            VERBATIM
+    )
 
-  # 4. Create a target for the DLL and link it to Main
-  add_custom_target(ClientLibrary DEPENDS "${DOTNET_DLL_PATH}")
-  add_dependencies(Main ClientLibrary)
-  set_target_properties(ClientLibrary PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    # 4. Create a target for the DLL and link it to Main
+    add_custom_target(ClientLibrary DEPENDS "${DOTNET_DLL_PATH}")
+    add_dependencies(Main ClientLibrary)
+    set_target_properties(ClientLibrary PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-  # Copy ClientLibrary DLL to the executable's output directory
-  add_custom_command(TARGET Main POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "=== DEBUG: Copying ClientLibrary DLL from: ${DOTNET_DLL_PATH}"
-    COMMAND ${CMAKE_COMMAND} -E echo "=== DEBUG: Copying ClientLibrary DLL to: $<TARGET_FILE_DIR:Main>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${DOTNET_DLL_PATH}"
-      $<TARGET_FILE_DIR:Main>
-    COMMAND ${CMAKE_COMMAND} -E echo "=== DEBUG: ClientLibrary DLL copy complete"
-    COMMENT "Copying ClientLibrary DLL to build directory"
-  )
+    # Copy ClientLibrary DLL to the executable's output directory
+    add_custom_command(TARGET Main POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E echo "=== DEBUG: Copying ClientLibrary DLL from: ${DOTNET_DLL_PATH}"
+      COMMAND ${CMAKE_COMMAND} -E echo "=== DEBUG: Copying ClientLibrary DLL to: $<TARGET_FILE_DIR:Main>"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DOTNET_DLL_PATH}"
+        $<TARGET_FILE_DIR:Main>
+      COMMAND ${CMAKE_COMMAND} -E echo "=== DEBUG: ClientLibrary DLL copy complete"
+      COMMENT "Copying ClientLibrary DLL to build directory"
+    )
+  endif()
 
   # ConstantsReplacer build target
   set(CONSTANTS_REPLACER_PROJ "${CMAKE_CURRENT_SOURCE_DIR}/../ConstantsReplacer/ConstantsReplacer.csproj")
@@ -412,6 +409,59 @@ if (DOTNET_EXECUTABLE)
   )
 
   add_custom_target(ConstantsReplacer DEPENDS "${CONSTANTS_REPLACER_OUTPUT}")
+
+  # ResxGen: .resx -> typed C++ accessors under namespace I18N::<Group>.
+  # Discovers groups from filenames (<Group>.<locale>.resx) and emits one
+  # .h/.cpp per group plus a master All.h/All.cpp. Generated output lives
+  # in the build tree only and is consumed by Main via target_sources.
+  set(RESXGEN_PROJ "${CMAKE_CURRENT_SOURCE_DIR}/../Tools/ResxGen/ResxGen.csproj")
+  set(RESX_INPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Localization")
+  set(RESX_OUTPUT_DIR "${CMAKE_BINARY_DIR}/Generated/I18N")
+  file(MAKE_DIRECTORY "${RESX_OUTPUT_DIR}")
+
+  file(GLOB RESX_FILES CONFIGURE_DEPENDS "${RESX_INPUT_DIR}/*.resx")
+  file(GLOB_RECURSE RESXGEN_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../Tools/ResxGen/*.cs")
+
+  if (RESX_FILES)
+    # Compute groups from filenames: Editor.en.resx -> group "Editor".
+    set(RESX_GROUPS "")
+    foreach(resx_file IN LISTS RESX_FILES)
+      get_filename_component(stem "${resx_file}" NAME_WE)  # Editor.en
+      string(REGEX REPLACE "\\.[^.]*$" "" group_name "${stem}")
+      list(APPEND RESX_GROUPS "${group_name}")
+    endforeach()
+    list(REMOVE_DUPLICATES RESX_GROUPS)
+
+    # Predict generator output for the custom command's OUTPUT list.
+    set(RESX_GEN_HEADERS "${RESX_OUTPUT_DIR}/All.h")
+    set(RESX_GEN_SOURCES "${RESX_OUTPUT_DIR}/All.cpp")
+    foreach(group_name IN LISTS RESX_GROUPS)
+      list(APPEND RESX_GEN_HEADERS "${RESX_OUTPUT_DIR}/${group_name}.h")
+      list(APPEND RESX_GEN_SOURCES "${RESX_OUTPUT_DIR}/${group_name}.cpp")
+    endforeach()
+
+    mu_native_path("${RESXGEN_PROJ}" RESXGEN_PROJ_NATIVE)
+    mu_native_path("${RESX_INPUT_DIR}" RESX_INPUT_DIR_NATIVE)
+    mu_native_path("${RESX_OUTPUT_DIR}" RESX_OUTPUT_DIR_NATIVE)
+
+    add_custom_command(
+      OUTPUT ${RESX_GEN_HEADERS} ${RESX_GEN_SOURCES}
+      COMMAND ${CMAKE_COMMAND} -E env
+              "NUGET_PACKAGES=${DOTNET_NUGET_DIR_NATIVE}"
+              "DOTNET_CLI_HOME=${DOTNET_TEMP_DIR_NATIVE}"
+              "${DOTNET_EXECUTABLE}" run --project "${RESXGEN_PROJ_NATIVE}" -c $<CONFIG>
+              -- --input "${RESX_INPUT_DIR_NATIVE}" --output "${RESX_OUTPUT_DIR_NATIVE}"
+              --wide-groups Game,Dialog
+      DEPENDS ${RESX_FILES} ${RESXGEN_SOURCES} "${RESXGEN_PROJ}"
+      COMMENT "ResxGen: regenerating C++ I18N accessors from .resx"
+      VERBATIM
+    )
+
+    add_custom_target(ResxGen DEPENDS ${RESX_GEN_HEADERS} ${RESX_GEN_SOURCES})
+    add_dependencies(Main ResxGen)
+    target_sources(Main PRIVATE ${RESX_GEN_SOURCES})
+    target_include_directories(Main PRIVATE "${CMAKE_BINARY_DIR}/Generated")
+  endif()
 else()
   message(WARNING ".NET SDK not found. MUnique.Client.Library.dll will NOT be built. "
     "The game will run but cannot connect to the server. Install .NET SDK 10.0+ to enable.")
@@ -482,9 +532,14 @@ if (CMAKE_CXX_COMPILER MATCHES "mingw32" OR CMAKE_CXX_COMPILER MATCHES "w64-ming
     comdlg32
     advapi32
     ${MU_TURBOJPEG_STATIC_LIB}
-    wzAudio
   )
 endif()
+
+# Link SDL3 + SDL3_mixer (audio) on all platforms.
+target_link_libraries(Main PRIVATE
+  SDL3::SDL3
+  SDL3_mixer::SDL3_mixer
+)
 
 # Link ImGui for all platforms when editor is enabled
 if(ENABLE_EDITOR)

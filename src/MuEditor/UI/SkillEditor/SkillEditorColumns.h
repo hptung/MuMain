@@ -3,8 +3,8 @@
 #ifdef _EDITOR
 
 #include <windows.h>
-#include "GameData/SkillData/SkillFieldMetadata.h"
-#include "_struct.h"
+#include "Data/GameData/SkillData/SkillFieldMetadata.h"
+#include "Core/Globals/_struct.h"
 
 // Forward declaration
 class CSkillEditorTable;

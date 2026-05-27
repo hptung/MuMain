@@ -5,12 +5,12 @@
 #include "stdafx.h"
 #include "WebzenScene.h"
 #include "SceneCore.h"
-#include "../ZzzOpenglUtil.h"
-#include "../ZzzTexture.h"
-#include "../ZzzInterface.h"
-#include "../ZzzOpenData.h"
-#include "../UIMng.h"
-#include "../NewUISystem.h"
+#include "Render/Textures/ZzzOpenglUtil.h"
+#include "Render/Textures/ZzzTexture.h"
+#include "Engine/Object/ZzzInterface.h"
+#include "Engine/Object/ZzzOpenData.h"
+#include "UI/Legacy/UIMng.h"
+#include "UI/NewUI/NewUISystem.h"
 
 // External declarations
 extern EGameScene SceneFlag;

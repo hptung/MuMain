@@ -4,30 +4,29 @@
 
 #include "stdafx.h"
 #include "LoginScene.h"
-#include "../Camera/CameraUtility.h"
-#include "../Camera/CameraManager.h"
-#include "../CameraMove.h"
-#include "../DSPlaySound.h"
-#include "../ZzzOpenglUtil.h"
-#include "../ZzzObject.h"
-#include "../ZzzCharacter.h"
-#include "../ZzzLodTerrain.h"
-#include "../ZzzInterface.h"
-#include "../ZzzEffect.h"
-#include "../GOBoid.h"
-#include "../w_PetProcess.h"
-#include "../MapManager.h"
-#include "../UIMng.h"
-#include "../Input.h"
-#include "../WSclient.h"
-#include "../Utilities/Log/muConsoleDebug.h"
-#include "../ZzzInterface.h"
-#include "../GlobalText.h"
-#include "../ZzzCharacter.h"
-#include "../UIControls.h"
+#include "Camera/CameraUtility.h"
+#include "Camera/CameraManager.h"
+#include "Camera/CameraMove.h"
+#include "Audio/DSPlaySound.h"
+#include "Render/Textures/ZzzOpenglUtil.h"
+#include "Engine/Object/ZzzObject.h"
+#include "Engine/Object/ZzzCharacter.h"
+#include "Render/Terrain/ZzzLodTerrain.h"
+#include "Engine/Object/ZzzInterface.h"
+#include "Render/Effects/ZzzEffect.h"
+#include "Engine/AI/GOBoid.h"
+#include "GameLogic/Pets/w_PetProcess.h"
+#include "World/MapInfra/MapManager.h"
+#include "UI/Legacy/UIMng.h"
+#include "Core/Input/Input.h"
+#include "Network/Server/WSclient.h"
+#include "Core/Utilities/Log/muConsoleDebug.h"
+#include "I18N/All.h"
+#include "Engine/Object/ZzzCharacter.h"
+#include "UI/Legacy/UIControls.h"
 #include "SceneCommon.h"
-#include "../ZzzOpenData.h"
-#include "../NewUISystem.h"
+#include "Engine/Object/ZzzOpenData.h"
+#include "UI/NewUI/NewUISystem.h"
 
 // External declarations
 extern int DeleteGuildIndex;
@@ -450,16 +449,16 @@ bool NewRenderLogInScene(HDC hDC)
     g_pRenderText->SetTextColor(255, 255, 255, 255);
     g_pRenderText->SetBgColor(0, 0, 0, 128);
 
-    wcscpy_s(Text, 100, GlobalText[454]);
+    wcscpy_s(Text, 100, I18N::Game::CCopyright2001Webzen);
     GetTextExtentPoint32(g_pRenderText->GetFontDC(), Text, lstrlen(Text), &Size);
     g_pRenderText->RenderText(335 - Size.cx * REFERENCE_WIDTH / WindowWidth, REFERENCE_HEIGHT - Size.cy * REFERENCE_WIDTH / WindowWidth - 1, Text);
 
-    wcscpy_s(Text, 100, GlobalText[455]);
+    wcscpy_s(Text, 100, I18N::Game::AllRightsReserved);
 
     GetTextExtentPoint32(g_pRenderText->GetFontDC(), Text, lstrlen(Text), &Size);
     g_pRenderText->RenderText(335, REFERENCE_HEIGHT - Size.cy * REFERENCE_WIDTH / WindowWidth - 1, Text);
 
-    swprintf_s(Text, 100, GlobalText[456], m_ExeVersion);
+    swprintf_s(Text, 100, I18N::Game::VerS, m_ExeVersion);
 
     GetTextExtentPoint32(g_pRenderText->GetFontDC(), Text, lstrlen(Text), &Size);
     g_pRenderText->RenderText(0, REFERENCE_HEIGHT - Size.cy * REFERENCE_WIDTH / WindowWidth - 1, Text);

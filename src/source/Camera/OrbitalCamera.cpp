@@ -3,12 +3,12 @@
 #include "stdafx.h"
 #include "OrbitalCamera.h"
 #include "CameraManager.h"
-#include "../ZzzOpenglUtil.h"
-#include "../ZzzCharacter.h"
+#include "Render/Textures/ZzzOpenglUtil.h"
+#include "Engine/Object/ZzzCharacter.h"
 #include <cmath>
 
-#include "UIControls.h"
-#include "GameConfig/GameConfig.h"
+#include "UI/Legacy/UIControls.h"
+#include "Data/GameConfig/GameConfig.h"
 #include "CameraDebugLog.h"
 
 #ifndef M_PI
