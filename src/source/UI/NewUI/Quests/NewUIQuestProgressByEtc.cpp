@@ -109,11 +109,9 @@ bool CNewUIQuestProgressByEtc::ProcessBtns()
         g_pNewUISystem->Hide(SEASON3B::INTERFACE_QUEST_PROGRESS_ETC);
         return true;
     }
-    else if (SEASON3B::IsPress(VK_LBUTTON) && CheckMouseIn(m_Pos.x + 169, m_Pos.y + 7, 13, 12))
-    {
-        g_pNewUISystem->Hide(SEASON3B::INTERFACE_QUEST_PROGRESS_ETC);
+    // Top-right corner close "X" (shared frame): hides + swallows the click.
+    else if (g_pNewUISystem->HandleFrameCornerClose(m_Pos, SEASON3B::INTERFACE_QUEST_PROGRESS_ETC))
         return true;
-    }
     else if (m_btnProgressR.UpdateMouseEvent())
     {
         if (m_nSelNPCPage == m_nMaxNPCPage)
@@ -147,8 +145,8 @@ bool CNewUIQuestProgressByEtc::ProcessBtns()
     {
         if (m_btnComplete.UpdateMouseEvent())
         {
-            const auto questNumber = static_cast<uint16_t>((m_dwCurQuestIndex & 0xFF00) >> 16);
-            const auto questGroup = static_cast<uint16_t>(m_dwCurQuestIndex & 0xFF);
+            const auto questNumber = static_cast<uint16_t>(LOWORD(m_dwCurQuestIndex));
+            const auto questGroup = static_cast<uint16_t>(HIWORD(m_dwCurQuestIndex));
             SocketClient->ToGameServer()->SendQuestCompletionRequest(questNumber, questGroup);
             PlayBuffer(SOUND_CLICK01);
             m_bCanClick = false;
@@ -182,8 +180,8 @@ bool CNewUIQuestProgressByEtc::UpdateSelTextMouseEvent()
 
             if (SEASON3B::IsRelease(VK_LBUTTON))
             {
-                const auto questNumber = static_cast<uint16_t>((m_dwCurQuestIndex & 0xFF00) >> 16);
-                const auto questGroup = static_cast<uint16_t>(m_dwCurQuestIndex & 0xFF);
+                const auto questNumber = static_cast<uint16_t>(LOWORD(m_dwCurQuestIndex));
+                const auto questGroup = static_cast<uint16_t>(HIWORD(m_dwCurQuestIndex));
                 SocketClient->ToGameServer()->SendQuestProceedRequest(questNumber, questGroup, m_nSelAnswer);
                 PlayBuffer(SOUND_CLICK01);
                 m_bCanClick = false;

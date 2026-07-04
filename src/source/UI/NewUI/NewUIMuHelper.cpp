@@ -44,7 +44,8 @@ enum ECheckBoxId: uint16_t
     CHECKBOX_ID_AUTO_ACCEPT_GUILD,
     CHECKBOX_ID_DR_ATTACK_CEASE,
     CHECKBOX_ID_DR_ATTACK_AUTO,
-    CHECKBOX_ID_DR_ATTACK_TOGETHER
+    CHECKBOX_ID_DR_ATTACK_TOGETHER,
+    CHECKBOX_ID_FALLBACK_BASIC_ATTACK
 };
 
 enum EButtonId : uint16_t
@@ -241,7 +242,8 @@ void CNewUIMuHelper::InitCheckBox()
     InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 94, m_Pos.y + 226, 15, 15, 0, &I18N::Game::Delay, CHECKBOX_ID_SKILL3_DELAY, 0);
     InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 94, m_Pos.y + 243, 15, 15, 0, &I18N::Game::Con, CHECKBOX_ID_SKILL3_CONDITION, 0);
     InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 226, 15, 15, 0, &I18N::Game::Combo, CHECKBOX_ID_COMBO, 0);
-    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 276, 15, 15, 0, &I18N::Game::BuffDuration, CHECKBOX_ID_BUFF_DURATION, 0);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 266, 15, 15, 0, &I18N::Game::BasicAttackFallback, CHECKBOX_ID_FALLBACK_BASIC_ATTACK, 0);
+    InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 291, 15, 15, 0, &I18N::Game::BuffDuration, CHECKBOX_ID_BUFF_DURATION, 0);
 
     InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 218, 15, 15, 0, &I18N::Game::UseDarkSpirits, CHECKBOX_ID_USE_PET, 0);
     InsertCheckBox(IMAGE_CHECKBOX_BTN, m_Pos.x + 18, m_Pos.y + 218, 15, 15, 0, &I18N::Game::Party, CHECKBOX_ID_PARTY, 0);
@@ -285,6 +287,7 @@ void CNewUIMuHelper::InitCheckBox()
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_ACCEPT_FRIEND);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_DEFEND);
     RegisterBoxCharacter(0xFF, CHECKBOX_ID_AUTO_ACCEPT_GUILD);
+    RegisterBoxCharacter(0xFF, CHECKBOX_ID_FALLBACK_BASIC_ATTACK);
 
     RegisterBoxCharacter(Dark_Knight, CHECKBOX_ID_SKILL3_DELAY);
     RegisterBoxCharacter(Dark_Knight, CHECKBOX_ID_SKILL3_CONDITION);
@@ -320,9 +323,9 @@ void CNewUIMuHelper::InitImage()
     InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 17, m_Pos.y + 171, 32, 38, SKILL_SLOT_SKILL1, 0);
     InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 61, m_Pos.y + 171, 32, 38, SKILL_SLOT_SKILL2, 0);
     InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 61, m_Pos.y + 222, 32, 38, SKILL_SLOT_SKILL3, 0);
-    InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 21, m_Pos.y + 293, 32, 38, SKILL_SLOT_BUFF1, 0);
-    InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 55, m_Pos.y + 293, 32, 38, SKILL_SLOT_BUFF2, 0);
-    InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 89, m_Pos.y + 293, 32, 38, SKILL_SLOT_BUFF3, 0);
+    InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 21, m_Pos.y + 308, 32, 38, SKILL_SLOT_BUFF1, 0);
+    InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 55, m_Pos.y + 308, 32, 38, SKILL_SLOT_BUFF2, 0);
+    InsertIcon(BITMAP_INTERFACE_NEW_SKILLICON_BEGIN + 4, m_Pos.x + 89, m_Pos.y + 308, 32, 38, SKILL_SLOT_BUFF3, 0);
 
     InsertIcon(IMAGE_MACROUI_HELPER_INPUTNUMBER, m_Pos.x + 140, m_Pos.y + 137, 20, 15, TEXTBOX_IMG_DISTANCE_TIME, 0);
     InsertIcon(IMAGE_MACROUI_HELPER_INPUTNUMBER, m_Pos.x + 140, m_Pos.y + 174, 20, 15, TEXTBOX_IMG_SKILL1_TIME, 0);
@@ -544,6 +547,7 @@ bool CNewUIMuHelper::UpdateMouseEvent()
         {
             g_pNewUISystem->Hide(INTERFACE_MUHELPER);
             SetFocus(g_hWnd);
+            CUITextInputBox::ReleaseFocus();
         }
         else if (iButtonId == BUTTON_ID_INIT_CONFIG)
         {
@@ -554,6 +558,7 @@ bool CNewUIMuHelper::UpdateMouseEvent()
             SaveConfig();
             g_pNewUISystem->Hide(INTERFACE_MUHELPER);
             SetFocus(g_hWnd);
+            CUITextInputBox::ReleaseFocus();
         }
 
         return false;
@@ -685,6 +690,7 @@ bool CNewUIMuHelper::UpdateMouseEvent()
         else
         {
             SetFocus(g_hWnd);
+            CUITextInputBox::ReleaseFocus();
         }
 
         POINT ptExitBtn = { m_Pos.x + 169, m_Pos.y + 7 };
@@ -730,6 +736,7 @@ bool CNewUIMuHelper::UpdateKeyEvent()
             g_pNewUISystem->Hide(INTERFACE_MUHELPER_SKILL_LIST);
             //PlayBuffer(SOUND_CLICK01);
             SetFocus(g_hWnd);
+            CUITextInputBox::ReleaseFocus();
 
             return false;
         }
@@ -875,8 +882,20 @@ void CNewUIMuHelper::ApplyConfigFromCheckbox(int iCheckboxId, bool bState)
         _TempConfig.bPickExtraItems = bState;
         break;
 
+    case CHECKBOX_ID_AUTO_ACCEPT_FRIEND:
+        _TempConfig.bAutoAcceptFriend = bState;
+        break;
+
+    case CHECKBOX_ID_AUTO_ACCEPT_GUILD:
+        _TempConfig.bAutoAcceptGuild = bState;
+        break;
+
     case CHECKBOX_ID_AUTO_DEFEND:
         _TempConfig.bUseSelfDefense = bState;
+        break;
+
+    case CHECKBOX_ID_FALLBACK_BASIC_ATTACK:
+        _TempConfig.bFallbackBasicAttack = bState;
         break;
 
     default:
@@ -926,7 +945,7 @@ void CNewUIMuHelper::SaveExtraItem()
 {
     wchar_t wsExtraItem[MAX_ITEM_NAME + 1] = { 0 };
 
-    m_ItemInput.GetText(wsExtraItem, sizeof(wsExtraItem));
+    m_ItemInput.GetText(wsExtraItem, std::size(wsExtraItem));
 
     if (wcscmp(wsExtraItem, L"") != 0)
     {
@@ -944,6 +963,7 @@ void CNewUIMuHelper::SaveExtraItem()
 
     m_ItemInput.SetText(L"");
     SetFocus(g_hWnd);
+    CUITextInputBox::ReleaseFocus();
 }
 
 void CNewUIMuHelper::RemoveExtraItem()
@@ -1079,6 +1099,7 @@ void CNewUIMuHelper::ApplyConfig()
     m_CheckBoxList[CHECKBOX_ID_AUTO_ACCEPT_FRIEND].box->RegisterBoxState(_TempConfig.bAutoAcceptFriend);
     m_CheckBoxList[CHECKBOX_ID_AUTO_ACCEPT_GUILD].box->RegisterBoxState(_TempConfig.bAutoAcceptGuild);
     m_CheckBoxList[CHECKBOX_ID_AUTO_DEFEND].box->RegisterBoxState(_TempConfig.bUseSelfDefense);
+    m_CheckBoxList[CHECKBOX_ID_FALLBACK_BASIC_ATTACK].box->RegisterBoxState(_TempConfig.bFallbackBasicAttack);
 
     m_ItemFilter.Clear();
     for (const auto& item : _TempConfig.aExtraItems)
@@ -1098,13 +1119,13 @@ void CNewUIMuHelper::SaveConfig()
 {
     wchar_t wsNumberInput[MAX_NUMBER_DIGITS + 1]{};
 
-    m_DistanceTimeInput.GetText(wsNumberInput, sizeof(wsNumberInput));
+    m_DistanceTimeInput.GetText(wsNumberInput, std::size(wsNumberInput));
     _TempConfig.iMaxSecondsAway = GetIntFromTextInput(wsNumberInput);
 
-    m_Skill2DelayInput.GetText(wsNumberInput, sizeof(wsNumberInput));
+    m_Skill2DelayInput.GetText(wsNumberInput, std::size(wsNumberInput));
     _TempConfig.aiSkillInterval[1] = GetIntFromTextInput(wsNumberInput);
 
-    m_Skill3DelayInput.GetText(wsNumberInput, sizeof(wsNumberInput));
+    m_Skill3DelayInput.GetText(wsNumberInput, std::size(wsNumberInput));
     _TempConfig.aiSkillInterval[2] = GetIntFromTextInput(wsNumberInput);
 
     _TempConfig.aiSkill[0] = m_aiSelectedSkills[0] > 0 ? m_aiSelectedSkills[0] : 0;
@@ -1141,6 +1162,7 @@ void CNewUIMuHelper::Show(bool bShow)
     }
 
     SetFocus(g_hWnd);
+    CUITextInputBox::ReleaseFocus();
 }
 
 bool CNewUIMuHelper::Render()
@@ -1164,13 +1186,16 @@ bool CNewUIMuHelper::Render()
 
     g_pRenderText->RenderText(m_Pos.x, m_Pos.y + 13, I18N::Game::OfficialMUHelper, 190, 0, RT3_SORT_CENTER);
 
-    RenderBack(m_Pos.x + 12, m_Pos.y + 340, 165, 46);
+    if (m_iCurrentOpenTab != 0)
+    {
+        RenderBack(m_Pos.x + 12, m_Pos.y + 340, 165, 46);
 
-    g_pRenderText->SetFont(g_hFont);
-    g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 347, I18N::Game::UsedExtensionFunction, 0, 0, RT3_SORT_CENTER);
+        g_pRenderText->SetFont(g_hFont);
+        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 347, I18N::Game::UsedExtensionFunction, 0, 0, RT3_SORT_CENTER);
 
-    g_pRenderText->SetTextColor(0xFF00B4FF);
-    g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 365, I18N::Game::NoExtensionFunctionBeingUsed, 0, 0, RT3_SORT_CENTER);
+        g_pRenderText->SetTextColor(0xFF00B4FF);
+        g_pRenderText->RenderText(m_Pos.x + 20, m_Pos.y + 365, I18N::Game::NoExtensionFunctionBeingUsed, 0, 0, RT3_SORT_CENTER);
+    }
 
     g_pRenderText->SetTextColor(TextColor);
 
@@ -1198,8 +1223,8 @@ bool CNewUIMuHelper::Render()
         RenderBack(m_Pos.x + 12, m_Pos.y + 73, 68, 50);
         RenderBack(m_Pos.x + 75, m_Pos.y + 73, 102, 50);
         RenderBack(m_Pos.x + 12, m_Pos.y + 120, 165, 39);
-        RenderBack(m_Pos.x + 12, m_Pos.y + 156, 165, 120);
-        RenderBack(m_Pos.x + 12, m_Pos.y + 273, 165, 69);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 156, 165, 135);
+        RenderBack(m_Pos.x + 12, m_Pos.y + 288, 165, 69);
 
         RenderImage(BITMAP_DISTANCE_BEGIN + _TempConfig.iHuntingRange, m_Pos.x + 29, m_Pos.y + 92, 15, 19, 0.f, 0.f, 15.f / 16.f, 19.f / 32.f);
     }
@@ -1891,6 +1916,7 @@ bool CNewUIMuHelperSkillList::UpdateKeyEvent()
         {
             g_pNewUISystem->Hide(INTERFACE_MUHELPER_SKILL_LIST);
             SetFocus(g_hWnd);
+            CUITextInputBox::ReleaseFocus();
             //PlayBuffer(SOUND_CLICK01);
 
             return false;
@@ -2831,6 +2857,7 @@ bool CNewUIMuHelperExt::UpdateMouseEvent()
         else
         {
             SetFocus(g_hWnd);
+            CUITextInputBox::ReleaseFocus();
         }
     }
     else if (m_iCurrentPage == SUB_PAGE_PARTY_CONFIG)
@@ -2842,6 +2869,7 @@ bool CNewUIMuHelperExt::UpdateMouseEvent()
         else
         {
             SetFocus(g_hWnd);
+            CUITextInputBox::ReleaseFocus();
         }
     }
 
@@ -2932,7 +2960,7 @@ void CNewUIMuHelperExt::Save()
 {
     wchar_t wsNumberInput[MAX_NUMBER_DIGITS + 1]{};
 
-    m_BuffTimeInput.GetText(wsNumberInput, sizeof(wsNumberInput));
+    m_BuffTimeInput.GetText(wsNumberInput, std::size(wsNumberInput));
     _TempConfig.iBuffCastInterval = CNewUIMuHelper::GetIntFromTextInput(wsNumberInput);
 
     _TempConfig.iPotionThreshold = m_iCurrentPotionThreshold * 10;

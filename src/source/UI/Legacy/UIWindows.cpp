@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "UIWindows.h"
+#include "Core/Time/FrameTimerScheduler.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Render/Textures/ZzzTexture.h"
 #include "Render/Models/ZzzBMD.h"
@@ -48,7 +49,8 @@ CUIWindowMgr::CUIWindowMgr()
     m_bChatReject = FALSE;
     m_iLastFriendWindowTabIndex = 0;
 
-    SetTimer(g_hWnd, CHATCONNECT_TIMER, 15 * 1000, 0);
+    Core::Time::FrameTimerScheduler::Instance().SetRepeating(
+        CHATCONNECT_TIMER, 15 * 1000, [] { g_pFriendMenu->SendChatRoomConnectCheck(); });
 
     g_iLetterReadNextPos_x = UIWND_DEFAULT;
     g_iLetterReadNextPos_y = UIWND_DEFAULT;
@@ -422,6 +424,7 @@ void CUIWindowMgr::HideAllWindow(BOOL bHide, BOOL bMainClose)
     {
         SetWindowsEnable(FALSE);
         SetFocus(g_hWnd);
+        CUITextInputBox::ReleaseFocus();
     }
 }
 
@@ -520,6 +523,7 @@ void CUIWindowMgr::HandleMessage()
                     SaveIMEStatus();
 
                 SetFocus(g_hWnd);
+                CUITextInputBox::ReleaseFocus();
             }
             if (GetWindow(m_WorkMessage.m_iParam1)->GetState() == UISTATE_HIDE)
                 ShowHideWindow(m_WorkMessage.m_iParam1, TRUE);
@@ -562,6 +566,7 @@ void CUIWindowMgr::HandleMessage()
                     {
                         g_pWindowMgr->SetWindowsEnable(FALSE);
                         SetFocus(g_hWnd);
+                        CUITextInputBox::ReleaseFocus();
                     }
                 }
             }
@@ -569,6 +574,7 @@ void CUIWindowMgr::HandleMessage()
             {
                 g_pWindowMgr->SetWindowsEnable(FALSE);
                 SetFocus(g_hWnd);
+                CUITextInputBox::ReleaseFocus();
             }
         }
         break;
@@ -606,6 +612,7 @@ void CUIWindowMgr::HandleMessage()
                     {
                         g_pWindowMgr->SetWindowsEnable(FALSE);
                         SetFocus(g_hWnd);
+                        CUITextInputBox::ReleaseFocus();
                     }
                 }
             }
@@ -613,6 +620,7 @@ void CUIWindowMgr::HandleMessage()
             {
                 g_pWindowMgr->SetWindowsEnable(FALSE);
                 SetFocus(g_hWnd);
+                CUITextInputBox::ReleaseFocus();
             }
         }
         break;

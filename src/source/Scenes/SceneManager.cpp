@@ -3,11 +3,13 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "Core/Input/KeyState.h"
 #include <vector>
 #include <algorithm>
 #include <numeric>
 #include "SceneManager.h"
 #include "Core/Utilities/FrameProfiler.h"
+#include "Core/Utilities/PlatformInfo.h"
 
 //=============================================================================
 // Frame Timing State Implementation
@@ -32,13 +34,16 @@ FrameTimingState g_frameTiming;
 #include "Core/Input/Input.h"
 #include "UI/Legacy/UIMng.h"
 #include "Network/Server/WSclient.h"
+#include "Network/Reconnect/ReconnectManager.h"
+#include "UI/NewUI/Dialogs/ReconnectDialog.h"
 #include "GameLogic/Events/w_CursedTemple.h"
 #include "Network/Server/ServerListManager.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Engine/Object/ZzzInterface.h"
+#include "UI/NewUI/HUD/Notices.h"
 #include "I18N/All.h"
 #include "Engine/AI/ZzzAI.h"
-#include "Platform/Windows/Winmain.h"
+#include "App/Platform/Windows/Winmain.h"
 #include "Camera/CameraManager.h"
 #include "Camera/CameraMode.h"
 
@@ -193,12 +198,12 @@ static void GenerateScreenshotFilename(wchar_t* outFileName, wchar_t* outMessage
 {
     SYSTEMTIME st;
     GetLocalTime(&st);
-    swprintf(outFileName, L"Screen(%02d_%02d-%02d_%02d)-%04d.jpg",
+    mu_swprintf(outFileName, L"Screen(%02d_%02d-%02d_%02d)-%04d.jpg",
         st.wMonth, st.wDay, st.wHour, st.wMinute, GrabScreen);
-    swprintf(outMessage, I18N::Game::SScreenshotSaved, outFileName);
+    mu_swprintf(outMessage, I18N::Game::SScreenshotSaved, outFileName);
 
     wchar_t lpszTemp[64];
-    swprintf(lpszTemp, L" [%ls / %ls]", g_ServerListManager->GetSelectServerName(), Hero->ID);
+    mu_swprintf(lpszTemp, L" [%ls / %ls]", g_ServerListManager->GetSelectServerName(), Hero->ID);
     wcscat(outMessage, lpszTemp);
 }
 
@@ -230,7 +235,7 @@ static void HandleScreenshotCapture()
         return;
     }
 
-    const bool addTimeStampToCapture = !HIBYTE(GetAsyncKeyState(VK_SHIFT));
+    const bool addTimeStampToCapture = !Core::Input::IsKeyDown(VK_SHIFT);
     wchar_t screenshotText[256];
 
     GenerateScreenshotFilename(GrabFileName, screenshotText);
@@ -280,7 +285,7 @@ void UpdateSceneState()
     g_dwMouseUseUIID = 0;
 
     UpdateActiveScene();
-    MoveNotices();
+    UI::Notices::Move();
     HandleScreenshotCapture();
 }
 
@@ -505,19 +510,19 @@ static void RenderDebugInfo()
     g_pRenderText->SetTextColor(255, 255, 255, 200);
 
     int y = DEBUG_TEXT_Y_START;
-    swprintf(szLine, L"FPS: %.1f  Avg: %.1f  Max: %.1f  Vsync: %d  CPU: %.1f%%",
+    mu_swprintf(szLine, L"FPS: %.1f  Avg: %.1f  Max: %.1f  Vsync: %d  CPU: %.1f%%",
         FPS_AVG, s_avgFps, s_highestFps, IsVSyncEnabled(), CPU_AVG);
     g_pRenderText->RenderText((int)DEBUG_TEXT_X, y, szLine); y += DEBUG_TEXT_LINE_HEIGHT;
 
-    swprintf(szLine, L"1%% Low: %.1f  Slowest: %.1f  Frame: %.2fms",
+    mu_swprintf(szLine, L"1%% Low: %.1f  Slowest: %.1f  Frame: %.2fms",
         s_onePercentLow, s_slowestFrameFps,
         (s_avgFps > 0.0f) ? 1000.0f / s_avgFps : 0.0f);
     g_pRenderText->RenderText((int)DEBUG_TEXT_X, y, szLine); y += DEBUG_TEXT_LINE_HEIGHT;
 
-    swprintf(szLine, L"MousePos: %d %d %d", MouseX, MouseY, MouseLButtonPush);
+    mu_swprintf(szLine, L"MousePos: %d %d %d", MouseX, MouseY, MouseLButtonPush);
     g_pRenderText->RenderText((int)DEBUG_TEXT_X, y, szLine); y += DEBUG_TEXT_LINE_HEIGHT;
 
-    swprintf(szLine, L"Camera3D: %.1f %.1f:%.1f:%.1f", g_Camera.FOV, g_Camera.Angle[0], g_Camera.Angle[1], g_Camera.Angle[2]);
+    mu_swprintf(szLine, L"Camera3D: %.1f %.1f:%.1f:%.1f", g_Camera.FOV, g_Camera.Angle[0], g_Camera.Angle[1], g_Camera.Angle[2]);
     g_pRenderText->RenderText((int)DEBUG_TEXT_X, y, szLine); y += DEBUG_TEXT_LINE_HEIGHT;
 
     // Compile-time build info: configuration, feature flags, compiler, arch,
@@ -553,18 +558,23 @@ static void RenderDebugInfo()
 #else
         "x86";
 #endif
-    swprintf(szLine, L"Build: %hs %hs %hs %hs  %hs %hs",
+    mu_swprintf(szLine, L"Build: %hs %hs %hs %hs  %hs %hs",
              kBuildType, kEditor, kCompiler, kArch, __DATE__, __TIME__);
     g_pRenderText->RenderText((int)DEBUG_TEXT_X, y, szLine); y += DEBUG_TEXT_LINE_HEIGHT;
 
+    // Runtime OS name and version (compile-time arch above doesn't capture which
+    // OS build the binary is actually running on).
+    mu_swprintf(szLine, L"OS: %ls", Core::Platform::GetOSVersionString().c_str());
+    g_pRenderText->RenderText((int)DEBUG_TEXT_X, y, szLine); y += DEBUG_TEXT_LINE_HEIGHT;
+
     // Active camera mode (cycled with F9).
-    swprintf(szLine, L"Camera: %hs", CameraModeToString(CameraManager::Instance().GetCurrentMode()));
+    mu_swprintf(szLine, L"Camera: %hs", CameraModeToString(CameraManager::Instance().GetCurrentMode()));
     g_pRenderText->RenderText((int)DEBUG_TEXT_X, y, szLine); y += DEBUG_TEXT_LINE_HEIGHT;
 
     // Per-pass frame timing (ms) — accumulated by FRAME_PROFILE scopes around the
     // major render passes in MainScene. Reset just below so next frame starts fresh.
     using FP = FrameProfiler::Pass;
-    swprintf(szLine, L"Frame ms  T:%5.2f  O:%5.2f  C:%5.2f  I:%5.2f  E:%5.2f",
+    mu_swprintf(szLine, L"Frame ms  T:%5.2f  O:%5.2f  C:%5.2f  I:%5.2f  E:%5.2f",
              FrameProfiler::AccumulatorMs(FP::Terrain),
              FrameProfiler::AccumulatorMs(FP::Objects),
              FrameProfiler::AccumulatorMs(FP::Characters),
@@ -595,7 +605,7 @@ static void RenderFpsCounter()
     g_pRenderText->SetBgColor(0, 0, 0, 100);
     g_pRenderText->SetTextColor(255, 255, 255, 200);
 
-    swprintf(szLine, L"FPS: %.1f", FPS_AVG);
+    mu_swprintf(szLine, L"FPS: %.1f", FPS_AVG);
     g_pRenderText->RenderText((int)DEBUG_TEXT_X, DEBUG_TEXT_Y_START, szLine);
 
     g_pRenderText->SetFont(g_hFont);
@@ -607,17 +617,39 @@ static void RenderFpsCounter()
  */
 static void CheckServerConnection()
 {
-    if (SocketClient == nullptr || !SocketClient->IsConnected())
+    if (SocketClient != nullptr && SocketClient->IsConnected())
     {
-        static BOOL s_bClosed = FALSE;
-        if (!s_bClosed)
-        {
-            s_bClosed = TRUE;
-            g_ErrorReport.Write(L"> Connection closed. ");
-            g_ErrorReport.WriteCurrentTime();
-            g_ConsoleDebug->Write(MCD_NORMAL, L"Connection closed");
-            CUIMng::Instance().PopUpMsgWin(MESSAGE_SERVER_LOST);
-        }
+        return;
+    }
+
+    // A reconnect already in progress manages its own connection attempts.
+    if (ReconnectManager::Instance().IsActive())
+    {
+        return;
+    }
+
+    // Auto-reconnect only makes sense in-game, where the server restores the
+    // character's saved position. Other scenes keep the original behaviour.
+    if (SceneFlag == MAIN_SCENE && ReconnectManager::Instance().HasSession())
+    {
+        g_ErrorReport.Write(L"> Connection lost in game - starting auto-reconnect. ");
+        g_ErrorReport.WriteCurrentTime();
+        g_ConsoleDebug->Write(MCD_NORMAL, L"Connection lost in game - starting auto-reconnect");
+        // Grab the clean game frame now (front buffer, dialog not yet drawn) so
+        // the brief re-login phase shows it frozen instead of a black screen.
+        UI::Reconnect::CaptureBackground();
+        ReconnectManager::Instance().RequestBegin();
+        return;
+    }
+
+    static BOOL s_bClosed = FALSE;
+    if (!s_bClosed)
+    {
+        s_bClosed = TRUE;
+        g_ErrorReport.Write(L"> Connection closed. ");
+        g_ErrorReport.WriteCurrentTime();
+        g_ConsoleDebug->Write(MCD_NORMAL, L"Connection closed");
+        CUIMng::Instance().PopUpMsgWin(MESSAGE_SERVER_LOST);
     }
 }
 
@@ -983,6 +1015,7 @@ void MainScene(HDC hDC)
         Success = RenderCurrentScene(hDC);
         RenderDebugInfo();
         RenderFpsCounter();
+        UI::Reconnect::RenderDialog();
 
         if (Success)
         {
@@ -999,7 +1032,7 @@ void MainScene(HDC hDC)
                 EndBitmap();
             }
 #endif
-            SwapBuffers(hDC);
+            PlatformSwapBuffers();
         }
 
         CheckServerConnection();
@@ -1018,6 +1051,11 @@ void RenderScene(HDC hDC)
 {
     CalcFPS();
     UpdateSceneState();
+
+    // Drive auto-reconnect after the scene loops have advanced this frame. It
+    // runs across all scenes because reconnect passes through the login,
+    // character and loading scenes on its way back into the game.
+    ReconnectManager::Instance().Update();
 
     g_frameTiming.MarkFrameRendered();
 

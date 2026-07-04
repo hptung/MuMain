@@ -43,6 +43,7 @@ What I have done so far:
     * Glow for red, blue and black fenrir
     * Additional screen resolutions
   * 🔥 Incorporated MU Helper UI and logic - there's some work to do but core functionality is usable
+  * 🔥 Auto-reconnect system
   * Removed if-defs for Rage Fighter class as we are targeting Season 6, so Rage
     Fighter should always be included.
   * Some minor bug fixes, e.g.:
@@ -272,7 +273,7 @@ The client identifies itself with Version `2.04d` and serial `k1Pk2jcET48mxL3b`.
 - [Options window and config](docs/options-window.md) - runtime
   resolution / windowed toggle, slider rounding, and what the options
   window stores in `config.ini`.
-- [Build guide](docs/build-guide.md) - platform-specific build notes.
+- [Build guide](docs/build/README.md) - platform-specific build notes.
 - [Translation system](docs/translation-system.md) - how the .resx ->
   generated C++ accessors pipeline works, how to add a string or a locale,
   runtime locale switching, and observer hooks for cached UI strings.

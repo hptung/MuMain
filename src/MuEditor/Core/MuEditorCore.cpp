@@ -4,7 +4,7 @@
 
 #include "MuEditorCore.h"
 #include "imgui.h"
-#include "imgui_impl_win32.h"
+#include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl2.h"
 #include "MuInputBlockerCore.h"
 #include "../Config/MuEditorConfig.h"
@@ -16,6 +16,34 @@
 #include "../UI/Console/MuEditorConsoleUI.h"
 #include "I18N/All.h"
 #include "Core/Utilities/StringUtils.h"
+
+#ifndef _WIN32
+#include <cstdio>    // popen / pclose
+#include <unistd.h>  // access
+#include <string>
+#include <vector>
+namespace
+{
+    // Resolve a font file via fontconfig (distro-agnostic), e.g.
+    // EditorFcMatch("sans-serif"). Empty if fc-match is unavailable.
+    std::string EditorFcMatch(const char* pattern)
+    {
+        const std::string cmd = std::string("fc-match -f '%{file}' '") + pattern + "' 2>/dev/null";
+        FILE* p = popen(cmd.c_str(), "r");
+        if (!p) return {};
+        std::string out;
+        char buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), p)) > 0)
+            out.append(buf, n);
+        pclose(p);
+        while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' '))
+            out.pop_back();
+        return out;
+    }
+    bool FontFileExists(const char* path) { return path && path[0] && ::access(path, R_OK) == 0; }
+}
+#endif
 
 // Windows cursor display counter thresholds
 // The cursor is visible when the counter is >= CURSOR_VISIBLE_THRESHOLD
@@ -52,10 +80,17 @@ CMuEditorCore& CMuEditorCore::GetInstance()
     return instance;
 }
 
-void CMuEditorCore::Initialize(HWND hwnd, HDC hdc)
+void CMuEditorCore::Initialize(SDL_Window* window, void* glContext)
 {
     if (m_bInitialized)
         return;
+
+    if (window == nullptr || glContext == nullptr)
+    {
+        fwprintf(stderr, L"[MuEditor] Initialize failed: window or glContext is null\n");
+        fflush(stderr);
+        return;
+    }
 
     fwprintf(stderr, L"[MuEditor] Initialize() called\n");
     fflush(stderr);
@@ -189,16 +224,22 @@ void CMuEditorCore::Initialize(HWND hwnd, HDC hdc)
         }
     }
 #else
-    // Linux: Try common fonts with Unicode support
-    const char* linuxFonts[] = {
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-    };
-    for (const char* fontPath : linuxFonts)
+    // Linux/Unix: resolve a system font via fontconfig (distro-agnostic), with
+    // well-known paths as a fallback. Skip paths that don't exist so ImGui does
+    // not log "Could not load font file!" for each miss.
+    std::vector<std::string> linuxFonts;
+    if (std::string fc = EditorFcMatch("sans-serif"); !fc.empty())
+        linuxFonts.push_back(std::move(fc));
+    for (const char* p : {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf" })
+        linuxFonts.emplace_back(p);
+    for (const std::string& fontPath : linuxFonts)
     {
-        if (io.Fonts->AddFontFromFileTTF(fontPath, 16.0f, &fontConfig, ranges.Data) != nullptr)
+        if (FontFileExists(fontPath.c_str()) &&
+            io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 16.0f, &fontConfig, ranges.Data) != nullptr)
         {
             fontLoaded = true;
             break;
@@ -206,6 +247,8 @@ void CMuEditorCore::Initialize(HWND hwnd, HDC hdc)
     }
     if (fontLoaded)
     {
+        // CJK is best-effort; keep the well-known paths (fc-match can return a
+        // non-CJK font when none is installed), but only try ones that exist.
         const char* cjkFonts[] = {
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
@@ -214,7 +257,8 @@ void CMuEditorCore::Initialize(HWND hwnd, HDC hdc)
         };
         for (const char* path : cjkFonts)
         {
-            if (io.Fonts->AddFontFromFileTTF(path, 16.0f, &cjkConfig, cjkRanges) != nullptr)
+            if (FontFileExists(path) &&
+                io.Fonts->AddFontFromFileTTF(path, 16.0f, &cjkConfig, cjkRanges) != nullptr)
             {
                 break;
             }
@@ -240,8 +284,21 @@ void CMuEditorCore::Initialize(HWND hwnd, HDC hdc)
     style.WindowRounding = 0.0f;
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.12f, 0.12f, 1.0f);
 
-    ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplOpenGL2_Init();
+    if (!ImGui_ImplSDL3_InitForOpenGL(window, glContext))
+    {
+        fwprintf(stderr, L"[MuEditor] ImGui_ImplSDL3_InitForOpenGL failed\n");
+        fflush(stderr);
+        ImGui::DestroyContext();
+        return;
+    }
+    if (!ImGui_ImplOpenGL2_Init())
+    {
+        fwprintf(stderr, L"[MuEditor] ImGui_ImplOpenGL2_Init failed\n");
+        fflush(stderr);
+        ImGui_ImplSDL3_Shutdown();
+        ImGui::DestroyContext();
+        return;
+    }
 
     fwprintf(stderr, L"[MuEditor] ImGui backends initialized\n");
     fflush(stderr);
@@ -272,7 +329,7 @@ void CMuEditorCore::Shutdown()
     g_MuSkillEditorUI.SaveColumnPreferences();
 
     ImGui_ImplOpenGL2_Shutdown();
-    ImGui_ImplWin32_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
     m_bInitialized = false;
@@ -288,35 +345,11 @@ void CMuEditorCore::Update()
     {
         ImGui_ImplOpenGL2_NewFrame();
 
-        // Only let Win32 backend update mouse when editor is open
-        if (m_bEditorMode)
-        {
-            ImGui_ImplWin32_NewFrame();
-        }
-        else
-        {
-            // When closed, manually create a minimal frame and update mouse position
-            ImGuiIO& io = ImGui::GetIO();
-
-            // Get window size
-            extern HWND g_hWnd;
-            RECT rect;
-            GetClientRect(g_hWnd, &rect);
-            io.DisplaySize = ImVec2((float)(rect.right - rect.left), (float)(rect.bottom - rect.top));
-            io.DeltaTime = 1.0f / 60.0f;
-
-            // Manually update mouse position for button detection
-            POINT mousePos;
-            if (GetCursorPos(&mousePos))
-            {
-                ScreenToClient(g_hWnd, &mousePos);
-                io.MousePos = ImVec2((float)mousePos.x, (float)mousePos.y);
-            }
-
-            // Update mouse button states
-            extern bool MouseLButton;
-            io.MouseDown[0] = MouseLButton;
-        }
+        // The SDL3 backend fills display size and mouse/keyboard from the SDL
+        // events fed via ImGui_ImplSDL3_ProcessEvent, so it works the same
+        // whether the editor is open or only the "Open Editor" button is shown
+        // (issue #442) - no manual Win32 frame setup needed.
+        ImGui_ImplSDL3_NewFrame();
 
         ImGui::NewFrame();
         m_bFrameStarted = true;
@@ -456,9 +489,12 @@ void CMuEditorCore::Render()
     extern bool g_bRenderGameCursor;
     g_bRenderGameCursor = !m_bHoveringUI;
 
+#ifdef _WIN32
     // Manage Windows cursor visibility
     // Windows maintains an internal display counter - cursor is visible when counter >= 0
-    // We need to loop to force the counter to the correct state
+    // We need to loop to force the counter to the correct state.
+    // Off Windows the SDL/ImGui backend drives the OS cursor itself, and the
+    // ShowCursor stub returns a constant so these loops would never terminate.
     static bool lastHoveringState = false;
     if (m_bHoveringUI != lastHoveringState)
     {
@@ -474,6 +510,7 @@ void CMuEditorCore::Render()
         }
         lastHoveringState = m_bHoveringUI;
     }
+#endif
 
     // Render ImGui and reset frame state
     ImGui::Render();

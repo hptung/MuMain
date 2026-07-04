@@ -3,6 +3,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "Engine/Object/EditObjects.h"
+#include "UI/Chat/Chat.h"
 #include "MainScene.h"
 #include "SceneCommon.h"
 #include "Camera/CameraUtility.h"
@@ -11,6 +13,7 @@
 #include "Engine/Object/ZzzCharacter.h"
 #include "Render/Terrain/ZzzLodTerrain.h"
 #include "Engine/Object/ZzzInterface.h"
+#include "Input/Selection.h"
 #include "Render/Effects/ZzzEffect.h"
 #include "World/MapInfra/MapManager.h"
 #include "UI/Legacy/UIMng.h"
@@ -21,6 +24,7 @@
 #include "Core/Utilities/Log/muConsoleDebug.h"
 #include "Core/Utilities/FrameProfiler.h"
 #include "Network/Server/WSclient.h"
+#include "Network/Reconnect/ReconnectManager.h"
 #include "Engine/AI/GOBoid.h"
 #include "GameLogic/Items/PersonalShopTitleImp.h"
 #include "UI/Legacy/UIManager.h"
@@ -132,6 +136,9 @@ static void InitializeMainScene()
 
     CurrentProtocolState = REQUEST_JOIN_MAP_SERVER;
     SocketClient->ToGameServer()->SendSelectCharacter(CharactersClient[SelectedHero].ID);
+
+    // Remember which character is in play so auto-reconnect can re-select it.
+    ReconnectManager::Instance().CacheCharacter(CharactersClient[SelectedHero].ID);
 
     CUIMng::Instance().CreateMainScene();
 
@@ -269,7 +276,7 @@ static void UpdateGameEntities()
 
     MoveBoids();
     MoveFishs();
-    MoveChat();
+    UI::Chat::MoveChat();
     UpdatePersonalShopTitleImp();
     MoveHero();
     MoveCharactersClient();
@@ -284,7 +291,7 @@ static void UpdateGameEntities()
     g_Direction.CheckDirection();
 
 #ifdef ENABLE_EDIT
-    EditObjects();
+    Editor::EditObjects();
 #endif //ENABLE_EDIT
 }
 
@@ -319,6 +326,12 @@ void MoveMainScene()
     }
 
     InitializeSceneFrame();
+
+    // While the reconnect dialog is up it's modal: block world clicks so they
+    // don't move the hero and instead reach the dialog's Cancel button.
+    if (ReconnectManager::Instance().IsActive())
+        MouseOnWindow = true;
+
     UpdateUIAndInput();
 
     if (ErrorMessage != 0)
@@ -516,7 +529,7 @@ static void RenderGameWorld(BYTE& byWaterMap, int width, int height)
  */
 static void RenderMainSceneUI()
 {
-    SelectObjects();
+    Input::Selection::SelectObjects();
     BeginBitmap();
     RenderObjectDescription();
 

@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include "UI/Chat/ChatInput.h"
 #include "UI/NewUI/Widgets/NewUIChatInputBox.h"
 #include "I18N/All.h"
 
@@ -186,15 +187,6 @@ void SEASON3B::CNewUIChatInputBox::SetFont(HFONT hFont)
 {
     m_pChatInputBox->SetFont(hFont);
     m_pWhsprIDInputBox->SetFont(hFont);
-}
-
-void SEASON3B::CNewUIChatInputBox::RebuildScaledResources()
-{
-    if (m_pChatInputBox)    m_pChatInputBox->RebuildScaledResources();
-    if (m_pWhsprIDInputBox) m_pWhsprIDInputBox->RebuildScaledResources();
-    // SetSize already SelectObject'd the (old) g_hFont into the new DC;
-    // re-apply with the CURRENT g_hFont so sizing/measuring is consistent.
-    SetFont(g_hFont);
 }
 
 bool SEASON3B::CNewUIChatInputBox::HaveFocus()
@@ -567,7 +559,7 @@ bool SEASON3B::CNewUIChatInputBox::UpdateKeyEvent()
                     {
                         if (Hero->SafeZone || (Hero->Helper.Type != MODEL_HORN_OF_UNIRIA && Hero->Helper.Type != MODEL_HORN_OF_DINORANT && Hero->Helper.Type != MODEL_DARK_HORSE_ITEM && Hero->Helper.Type != MODEL_HORN_OF_FENRIR))
                         {
-                            CheckChatText(szChatText);
+                            UI::Chat::CheckChatText(szChatText);
                         }
 
                         SocketClient->ToGameServer()->SendPublicChatMessage(Hero->ID, wstrText.c_str());
@@ -802,8 +794,10 @@ float SEASON3B::CNewUIChatInputBox::GetKeyEventOrder()
 
 void SEASON3B::CNewUIChatInputBox::OpenningProcess()
 {
-    m_pChatInputBox->GiveFocus();
+    // Set the state before focusing: a portable field ignores GiveFocus() while
+    // still hidden, so focusing after showing lets Enter-to-open type right away.
     m_pChatInputBox->SetState(UISTATE_NORMAL);
+    m_pChatInputBox->GiveFocus();
     m_pChatInputBox->SetText(L"");
 
     if (m_bWhisperSend == true)

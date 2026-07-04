@@ -2,6 +2,7 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "UI/Chat/Chat.h"
 #include "UI/NewUI/Character/NewUICharacterInfoWindow.h"
 #include "UI/NewUI/NewUISystem.h"
 #include "Character/CharacterManager.h"
@@ -167,13 +168,9 @@ bool SEASON3B::CNewUICharacterInfoWindow::UpdateMouseEvent()
 
 bool SEASON3B::CNewUICharacterInfoWindow::BtnProcess()
 {
-    POINT ptExitBtn1 = { m_Pos.x + 169, m_Pos.y + 7 };
-
-    if (SEASON3B::IsPress(VK_LBUTTON) && CheckMouseIn(ptExitBtn1.x, ptExitBtn1.y, 13, 12))
-    {
-        g_pNewUISystem->Hide(SEASON3B::INTERFACE_CHARACTER);
+    // Top-right corner close "X" (shared frame). Hides + swallows the click.
+    if (g_pNewUISystem->HandleFrameCornerClose(m_Pos, SEASON3B::INTERFACE_CHARACTER))
         return true;
-    }
 
     if (CharacterAttribute->LevelUpPoint > 0)
     {
@@ -325,7 +322,7 @@ void SEASON3B::CNewUICharacterInfoWindow::RenderSubjectTexts()
 
     g_pRenderText->SetFont(g_hFontBold);
     g_pRenderText->SetBgColor(20, 20, 20, 20);
-    SetPlayerColor(Hero->PK);
+    UI::Chat::SetPlayerColor(Hero->PK);
     g_pRenderText->RenderText(m_Pos.x, m_Pos.y + 12, strID, 190, 0, RT3_SORT_CENTER);
 
     wchar_t strServerName[MAX_TEXT_LENGTH];

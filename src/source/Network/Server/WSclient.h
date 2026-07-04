@@ -6,6 +6,7 @@
 #include "Dotnet/Connection.h"
 #include "Network/Server/CSMapServer.h"
 #include <span>
+#include <typeinfo>
 
 #define WM_ASYNCSELECTMSG (WM_USER+0)
 
@@ -92,11 +93,21 @@ inline uint64_t ntoh64(uint64_t value)
         ((value & 0xFF00000000000000ULL) >> 56);
 }
 
-// Template to cast a span to a packet struct in a safe way.
-template <typename T> T* safe_cast(const std::span<const BYTE> span)
+// Logs a size-mismatch when a typed safe_cast fails. Defined in WSclient.cpp
+// so the header stays free of g_ConsoleDebug includes.
+void LogSafeCastSizeMismatch(const char* packet_type, std::size_t received, std::size_t expected);
+
+// Casts a span to a packet struct, returning nullptr if the buffer is smaller
+// than sizeof(T). On failure, logs an MCD_ERROR with the packet type and the
+// observed vs expected size so the failure is never silent. Callers SHOULD
+// pass a human-readable packet_type; if omitted, typeid(T).name() is used as
+// a fallback (the compiler-mangled name, still better than nothing).
+template <typename T> T* safe_cast(const std::span<const BYTE> span, const char* packet_type = nullptr)
 {
     if (span.size() < sizeof(T))
     {
+        LogSafeCastSizeMismatch(packet_type ? packet_type : typeid(T).name(),
+                                span.size(), sizeof(T));
         return nullptr;
     }
 
@@ -1305,6 +1316,21 @@ typedef struct
     BYTE			m_byRandRewardCount;
     DWORD			m_dwQuestIndex;
 } PMSG_NPC_QUESTEXP_INFO, * LPPMSG_NPC_QUESTEXP_INFO;
+
+// GC[0xF6][0x0B] QuestStepInfo. C1 packet, 11 bytes. The server sends it
+// when the player selects a quest in the quest list (carrying StartingNumber),
+// when a quest has been started (carrying Number), or after the player refused
+// to start (carrying RefuseNumber). The client uses the (Group, StepNumber)
+// pair to look up the local quest progress entry.
+#pragma pack(push, 1)
+typedef struct
+{
+    PBMSG_HEADER	Header;
+    BYTE			SubCode;
+    WORD			m_wQuestStepNumber;
+    WORD			m_wQuestGroup;
+} PMSG_QUEST_STEP_INFO, * LPPMSG_QUEST_STEP_INFO;
+#pragma pack(pop)
 
 
 enum QUEST_REQUEST_TYPE : BYTE
@@ -3556,6 +3582,11 @@ extern bool SoccerObserver;
 
 BOOL CreateSocket(const wchar_t* IpAddr, unsigned short Port);
 void DeleteSocket();
+
+// Tears the live game session down to a clean login-scene state (matching the
+// in-game logout path). Used by the auto-reconnect flow before it replays login.
+void ResetClientToLoginScene();
+
 void ReceiveMovePosition(const BYTE* ReceiveBuffer);
 
 struct PacketInfo
@@ -3645,7 +3676,14 @@ typedef struct
     BYTE PickAllNearItems : 1;
     BYTE PickSelectedItems : 1;
     BYTE PetAttack;                          // Index: 32
-    BYTE _UnusedPadding[36];
+    
+    BYTE bUseSelfDefense : 1;                // Index: 33 (bit 0)
+    BYTE bAutoAcceptFriend : 1;              // Index: 33 (bit 1)
+    BYTE bAutoAcceptGuild : 1;               // Index: 33 (bit 2)
+    BYTE bFallbackBasicAttack : 1;           // Index: 33 (bit 3)
+    BYTE : 4;                                // Unused bits of Index 33
+
+    BYTE _UnusedPadding[35];                 // Index: 34 (35 bytes remaining)
     char ExtraItems[12][15];                 // Index: 69
 } PRECEIVE_MUHELPER_DATA, * LPRECEIVE_MUHELPER_DATA;
 #pragma pack(pop)
@@ -3658,3 +3696,8 @@ typedef struct
     DWORD Pause;
 } PRECEIVE_MUHELPER_STATUS, * LPRECEIVE_MUHELPER_STATUS;
 #pragma pack(pop)
+
+// Generated static_assert size guards. Sourced from OpenMU's authoritative
+// packet XML via tools/gen_wire_sizes.py. Must appear after all packet struct
+// declarations so the asserts can see them.
+#include "Network/Server/wire_sizes.generated.h"

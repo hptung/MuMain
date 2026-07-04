@@ -6,7 +6,7 @@
 #include "UI/NewUI/NPCs/NewUINPCDialogue.h"
 #include "I18N/All.h"
 
-#include <crtdbg.h>
+#include "Core/Platform/CrtDbg.h"
 #include "Audio/DSPlaySound.h"
 #include "UI/NewUI/NewUISystem.h"
 
@@ -105,11 +105,9 @@ bool CNewUINPCDialogue::ProcessBtns()
         g_pNewUISystem->Hide(SEASON3B::INTERFACE_NPC_DIALOGUE);
         return true;
     }
-    else if (SEASON3B::IsPress(VK_LBUTTON) && CheckMouseIn(m_Pos.x + 169, m_Pos.y + 7, 13, 12))
-    {
-        g_pNewUISystem->Hide(SEASON3B::INTERFACE_NPC_DIALOGUE);
+    // Top-right corner close "X" (shared frame): hides + swallows the click.
+    else if (g_pNewUISystem->HandleFrameCornerClose(m_Pos, SEASON3B::INTERFACE_NPC_DIALOGUE))
         return true;
-    }
     else if (m_btnProgressR.UpdateMouseEvent())
     {
         m_nSelNPCPage = MIN(++m_nSelNPCPage, m_nMaxNPCPage);
@@ -558,8 +556,9 @@ void CNewUINPCDialogue::ProcessSelTextResult()
         }
         else
         {
-            auto questNumber = (uint16_t)((m_adwQuestIndex[m_nSelSelText - 1] & 0xFF00) >> 16);
-            auto questGroup = (uint16_t)(m_adwQuestIndex[m_nSelSelText - 1] & 0xFF);
+            const DWORD dwSelectedQuest = m_adwQuestIndex[m_nSelSelText - 1];
+            const auto questNumber = static_cast<uint16_t>(LOWORD(dwSelectedQuest));
+            const auto questGroup = static_cast<uint16_t>(HIWORD(dwSelectedQuest));
             SocketClient->ToGameServer()->SendQuestSelectRequest(questNumber, questGroup, (BYTE)m_nSelSelText);
         }
     }

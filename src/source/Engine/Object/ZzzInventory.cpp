@@ -21,7 +21,7 @@
 
 #include "Core/Utilities/Debouncer.h"
 #include "GameLogic/Quests/CSQuest.h"
-#include "Platform/Windows/Local.h"
+#include "App/Platform/Windows/Local.h"
 #include "GameLogic/Items/PersonalShopTitleImp.h"
 #include "Engine/AI/GOBoid.h"
 #include "GameLogic/Items/CSItemOption.h"
@@ -11168,6 +11168,14 @@ unsigned int MarkColor[16];
 
 void CreateGuildMark(int nMarkIndex, bool blend)
 {
+    // Callers pass Hero->GuildMarkIndex straight through, which is -1 while the
+    // hero has no guild (set on dissolve, and before GetGuildMarkIndex resolves
+    // on create). Indexing GuildMark[-1] then reads its Mark[] from outside the
+    // array and feeds garbage to the texture upload - undefined, and a crash on
+    // Linux. Skip rendering when there is no valid mark.
+    if (nMarkIndex < 0 || nMarkIndex >= MAX_MARKS)
+        return;
+
     BITMAP_t* b = &Bitmaps[BITMAP_GUILD];
     int Width, Height;
     Width = (int)b->Width;

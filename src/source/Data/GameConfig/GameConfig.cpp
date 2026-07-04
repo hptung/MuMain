@@ -1,10 +1,14 @@
 #include "stdafx.h"
 #include "GameConfig.h"
 
+#ifdef _WIN32
 #include <imagehlp.h>
+#endif
 
 #include "GameConfigConstants.h"
-#include <windows.h>
+#include "Core/Platform/WinCompat.h"
+#include "Core/Platform/WinIni.h"  // private-profile (.ini) API
+#include "Core/Platform/Dpapi.h"   // DPAPI credential crypto (no-op off Windows)
 
 GameConfig& GameConfig::GetInstance()
 {
@@ -18,11 +22,24 @@ GameConfig::GameConfig()
     wchar_t exePath[MAX_PATH];
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
 
-    // Find last backslash to get directory
-    wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+    // Find the last path separator to get the directory. GetModuleFileNameW
+    // returns backslashes on Windows but forward slashes on Linux (issue #462),
+    // so accept either; truncating on the wrong one leaves the whole exe path
+    // glued to "config.ini", and the file is silently never found (every
+    // setting then falls back to its default).
+    wchar_t* lastBackslash = wcsrchr(exePath, L'\\');
+    wchar_t* lastForwardSlash = wcsrchr(exePath, L'/');
+    // Relational comparison of pointers into different arrays (or with null) is
+    // undefined behavior, and on Linux one of these is always null, so pick the
+    // later separator only when both exist.
+    wchar_t* lastSlash = nullptr;
+    if (lastBackslash && lastForwardSlash)
+        lastSlash = (lastBackslash > lastForwardSlash) ? lastBackslash : lastForwardSlash;
+    else
+        lastSlash = lastBackslash ? lastBackslash : lastForwardSlash;
     if (lastSlash)
     {
-        *(lastSlash + 1) = L'\0';  // Keep the trailing backslash
+        *(lastSlash + 1) = L'\0';  // Keep the trailing separator
     }
 
     m_configPath = exePath;
@@ -223,7 +240,7 @@ void GameConfig::DecryptCredentials(wchar_t* outUser, wchar_t* outPass, size_t u
 // Helper functions using Windows INI API
 int GameConfig::ReadInt(const wchar_t* section, const wchar_t* key, int defaultValue)
 {
-    return GetPrivateProfileIntW(section, key, defaultValue, m_configPath.c_str());
+    return GetPrivateProfileIntW(section, key, defaultValue, m_configPath.wstring().c_str());
 }
 
 void GameConfig::WriteInt(const wchar_t* section, const wchar_t* key, int value)
@@ -231,17 +248,17 @@ void GameConfig::WriteInt(const wchar_t* section, const wchar_t* key, int value)
     wchar_t buffer[32];
     swprintf_s(buffer, L"%d", value);
 
-    WritePrivateProfileStringW(section, key, buffer, m_configPath.c_str());
+    WritePrivateProfileStringW(section, key, buffer, m_configPath.wstring().c_str());
 }
 
 bool GameConfig::ReadBool(const wchar_t* section, const wchar_t* key, bool defaultValue)
 {
-    return GetPrivateProfileIntW(section, key, defaultValue ? 1 : 0, m_configPath.c_str()) != 0;
+    return GetPrivateProfileIntW(section, key, defaultValue ? 1 : 0, m_configPath.wstring().c_str()) != 0;
 }
 
 void GameConfig::WriteBool(const wchar_t* section, const wchar_t* key, bool value)
 {
-    WritePrivateProfileStringW(section, key, value ? L"1" : L"0", m_configPath.c_str());
+    WritePrivateProfileStringW(section, key, value ? L"1" : L"0", m_configPath.wstring().c_str());
 }
 
 std::wstring GameConfig::ReadString(const wchar_t* section, const wchar_t* key, const std::wstring& defaultValue)
@@ -249,7 +266,7 @@ std::wstring GameConfig::ReadString(const wchar_t* section, const wchar_t* key, 
     std::vector<wchar_t> buffer(2048);
     while (true)
     {
-        DWORD charsRead = GetPrivateProfileStringW(section, key, defaultValue.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()), m_configPath.c_str());
+        DWORD charsRead = GetPrivateProfileStringW(section, key, defaultValue.c_str(), buffer.data(), static_cast<DWORD>(buffer.size()), m_configPath.wstring().c_str());
         if (charsRead < buffer.size() - 1)
         {
             return std::wstring(buffer.data());
@@ -260,19 +277,19 @@ std::wstring GameConfig::ReadString(const wchar_t* section, const wchar_t* key, 
 
 void GameConfig::WriteString(const wchar_t* section, const wchar_t* key, const std::wstring& value)
 {
-    WritePrivateProfileStringW(section, key, value.c_str(), m_configPath.c_str());
+    WritePrivateProfileStringW(section, key, value.c_str(), m_configPath.wstring().c_str());
 }
 
 void GameConfig::RemoveObsoleteKey(const wchar_t* section, const wchar_t* key)
 {
     // Passing nullptr as the value deletes the key (Windows INI API).
-    WritePrivateProfileStringW(section, key, nullptr, m_configPath.c_str());
+    WritePrivateProfileStringW(section, key, nullptr, m_configPath.wstring().c_str());
 }
 
 void GameConfig::RemoveObsoleteSection(const wchar_t* section)
 {
     // Passing nullptr as the key deletes the entire section.
-    WritePrivateProfileStringW(section, nullptr, nullptr, m_configPath.c_str());
+    WritePrivateProfileStringW(section, nullptr, nullptr, m_configPath.wstring().c_str());
 }
 
 std::wstring GameConfig::DecryptSetting(const std::wstring& hexInput)

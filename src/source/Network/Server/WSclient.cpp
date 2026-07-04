@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "UI/Chat/Chat.h"
 #include <memory>
 #include "UI/Legacy/UIManager.h"
 #include "Guild/GuildCache.h"
@@ -7,6 +8,9 @@
 #include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "Engine/Object/ZzzInterface.h"
+#include "UI/Chat/Whisper.h"
+#include "Core/Input/ImeInput.h"
+#include "UI/NewUI/HUD/Notices.h"
 #include "Engine/Object/ZzzInventory.h"
 #include "Render/Terrain/ZzzLodTerrain.h"
 #include "Engine/Pathing/ZzzPath.h"
@@ -16,6 +20,8 @@
 #include "Render/Textures/ZzzOpenglUtil.h"
 #include "Engine/Object/ZzzOpenData.h"
 #include "Scenes/SceneCore.h"
+#include "Network/Reconnect/ReconnectManager.h"
+#include "Network/IncomingPacketQueue.h"
 #include "I18N/All.h"
 
 #include "Audio/DSPlaySound.h"
@@ -358,9 +364,28 @@ BOOL CreateSocket(const wchar_t* IpAddr, unsigned short Port)
         bResult = FALSE;
         g_ErrorReport.Write(L"Failed to connect. ");
         g_ErrorReport.WriteCurrentTime();
-        free(SocketClient);
+        delete SocketClient;
         SocketClient = nullptr;
-        CUIMng::Instance().PopUpMsgWin(MESSAGE_SERVER_LOST);
+
+        // While auto-reconnecting we probe the server repeatedly; the reconnect
+        // dialog already shows the status, so don't stack "server lost" popups.
+        if (!ReconnectManager::Instance().IsActive())
+        {
+            CUIMng::Instance().PopUpMsgWin(MESSAGE_SERVER_LOST);
+        }
+    }
+    else if (isEncrypted)
+    {
+        // Remember the address we actually connected to so auto-reconnect can
+        // probe it directly. Only cache game-server endpoints: a reconnect
+        // re-runs the login/character/join sequence, which the connect server
+        // can't answer. The connect server is the only unencrypted endpoint
+        // (see the port heuristic above), so caching when isEncrypted captures
+        // both the redirected game server (ReceiveServerConnect), a map-server
+        // change, and a direct game-server connection (where ReceiveServerConnect
+        // never runs), while skipping the connect server that would otherwise
+        // poison the cache and break reconnection (issue #68).
+        ReconnectManager::Instance().CacheServer(IpAddr, Port);
     }
 
     return bResult;
@@ -526,7 +551,12 @@ void ReceiveJoinServer(const BYTE* ReceiveBuffer)
         switch (Data2->Result)
         {
         case 0x01:
-            rUIMng.ShowWin(&rUIMng.m_LoginWin);
+            // Auto-reconnect logs in on its own and keeps its dialog on top, so
+            // don't surface the manual login window underneath it.
+            if (!ReconnectManager::Instance().IsActive())
+            {
+                rUIMng.ShowWin(&rUIMng.m_LoginWin);
+            }
             HeroKey = ((int)(Data2->NumberH) << 8) + Data2->NumberL;
             CurrentProtocolState = RECEIVE_JOIN_SERVER_SUCCESS;
             break;
@@ -811,7 +841,7 @@ void InitGame()
     RepairEnable = 0;
     CheckSkill = -1;
 
-    ClearNotice();
+    UI::Notices::Clear();
 
     CharacterAttribute->InventoryExtensions = 0;
     CharacterAttribute->Ability = 0;
@@ -827,7 +857,7 @@ void InitGame()
     g_shMutoNumber[1] = -1;
     g_shMutoNumber[2] = -1;
 
-    ClearWhisperID();
+    UI::Chat::Whisper::Clear();
 
     matchEvent::ClearMatchInfo();
 
@@ -929,7 +959,61 @@ BOOL ReceiveLogOut(const BYTE* ReceiveBuffer, BOOL bEncrypted)
     return (TRUE);
 }
 
+void ResetClientToLoginScene()
+{
+    // Mirror of the in-game logout path (see ReceiveLogOut, case 2): release the
+    // active game session and return to a clean login scene. The auto-reconnect
+    // flow always runs this from MAIN_SCENE, so the teardown is unconditional.
+    CryWolfMVPInit();
+    StopMusic();
+    AllStopSound();
+    SEASON3B::CNewUIInventoryCtrl::BackupPickedItem();
+    ReleaseMainData();
+
+    g_GuildCache.Reset();
+    memset(GuildMark[MARK_EDIT].Mark, 0, sizeof(GuildMark[MARK_EDIT].Mark));
+    memset(GuildMark[MARK_EDIT].GuildName, 0, sizeof(GuildMark[MARK_EDIT].GuildName));
+    SelectMarkColor = 0;
+
+    if (SocketClient != nullptr)
+    {
+        // Close but do NOT null the pointer: lots of code (and queued packet
+        // handlers) dereference SocketClient unconditionally, and Send/Close
+        // safely no-op on a closed connection. Nulling it here crashes them.
+        // The reconnect's Waiting phase calls DeleteSocket() before reconnecting.
+        SocketClient->Close();
+        g_bGameServerConnected = false;
+    }
+
+    // Drop packets received for the session we just tore down so they are not
+    // processed against the freed world data on the next frame.
+    Network::IncomingPacketQueue::Instance().Clear();
+
+    ReleaseCharacterSceneData();
+    SceneFlag = LOG_IN_SCENE;
+    g_sceneInit.ResetForDisconnect();
+    CurrentProtocolState = REQUEST_JOIN_SERVER;
+    LogIn = 0;
+    g_csMapServer.Init();
+    InitGame();
+
+    g_pWindowMgr->Reset();
+    g_pFriendList->ClearFriendList();
+    g_pLetterList->ClearLetterList();
+}
+
 int HeroIndex;
+
+void LogSafeCastSizeMismatch(const char* packet_type, std::size_t received, std::size_t expected)
+{
+    // %u + cast (instead of %zu) keeps the format compatible with older msvcrt
+    // builds where vswprintf does not recognise C99 length modifiers. Packet
+    // sizes always fit in 32 bits.
+    g_ConsoleDebug->Write(MCD_ERROR,
+        L"safe_cast<%.64hs>: received %u bytes, expected at least %u -- packet dropped",
+        packet_type ? packet_type : "?",
+        static_cast<unsigned>(received), static_cast<unsigned>(expected));
+}
 
 BOOL ReceiveJoinMapServer(std::span<const BYTE> ReceiveBuffer)
 {
@@ -942,7 +1026,8 @@ BOOL ReceiveJoinMapServer(std::span<const BYTE> ReceiveBuffer)
     CharacterAttribute->AbilityTime[1] = 0;
     CharacterAttribute->AbilityTime[2] = 0;
 
-    auto const Data = safe_cast<PRECEIVE_JOIN_MAP_SERVER_EXTENDED>(ReceiveBuffer);
+    auto const Data = safe_cast<PRECEIVE_JOIN_MAP_SERVER_EXTENDED>(
+        ReceiveBuffer, "PRECEIVE_JOIN_MAP_SERVER_EXTENDED");
     if (Data == nullptr)
     {
         assert(false);
@@ -1016,7 +1101,7 @@ BOOL ReceiveJoinMapServer(std::span<const BYTE> ReceiveBuffer)
     CurrentProtocolState = RECEIVE_JOIN_MAP_SERVER;
 
     LockInputStatus = false;
-    CheckIME_Status(true, 0);
+    Input::IME::CheckStatus(true, 0);
 
     LoadingWorld = 30;
     MouseUpdateTime = 0;
@@ -1069,7 +1154,7 @@ BOOL ReceiveJoinMapServer(std::span<const BYTE> ReceiveBuffer)
     else
     {
         wchar_t Text[256];
-        mu_swprintf(Text, L"%ls%ls", I18N::Game::WelcomeTo, gMapManager.GetMapName(gMapManager.WorldActive));
+        mu_swprintf(Text, I18N::Game::WelcomeTo, gMapManager.GetMapName(gMapManager.WorldActive));
 
         g_pSystemLogBox->AddText(Text, SEASON3B::TYPE_SYSTEM_MESSAGE);
     }
@@ -1734,12 +1819,12 @@ void ReceiveChat(const BYTE* ReceiveBuffer)
             }
             if (pFindGm)
             {
-                AssignChat(ID, Text);
+                UI::Chat::AssignChat(ID, Text);
                 g_pChatListBox->AddText(ID, Text, SEASON3B::TYPE_GM_MESSAGE);
             }
             else
             {
-                AssignChat(ID, Text, 1);
+                UI::Chat::AssignChat(ID, Text, 1);
             }
         }
         else
@@ -1760,12 +1845,12 @@ void ReceiveChat(const BYTE* ReceiveBuffer)
             }
             if (pFindGm)
             {
-                AssignChat(ID, Text);
+                UI::Chat::AssignChat(ID, Text);
                 g_pChatListBox->AddText(ID, Text, SEASON3B::TYPE_GM_MESSAGE);
             }
             else
             {
-                AssignChat(ID, Text);
+                UI::Chat::AssignChat(ID, Text);
                 g_pChatListBox->AddText(ID, Text, SEASON3B::TYPE_CHAT_MESSAGE);
             }
         }
@@ -1790,7 +1875,7 @@ void ReceiveChatWhisper(const BYTE* ReceiveBuffer)
     CMultiLanguage::ConvertFromUtf8(Text, Data->ChatText, messageSize);
     Text[messageSize] = L'\0';
 
-    RegistWhisperID(10, ID);
+    UI::Chat::Whisper::Register(10, ID);
 
     if (g_pOption->IsWhisperSound())
     {
@@ -1835,7 +1920,7 @@ void ReceiveChatKey(const BYTE* ReceiveBuffer)
 
     wchar_t ChatText[sizeof Data->ChatText + 1] {};
     CMultiLanguage::ConvertFromUtf8(ChatText, Data->ChatText, sizeof Data->ChatText);
-    CreateChat(CharactersClient[Index].ID, ChatText, &CharactersClient[Index]);
+    UI::Chat::CreateChat(CharactersClient[Index].ID, ChatText, &CharactersClient[Index]);
 }
 
 void ReceiveNotice(const BYTE* ReceiveBuffer)
@@ -1846,7 +1931,7 @@ void ReceiveNotice(const BYTE* ReceiveBuffer)
 
     if (Data->Result == 0)
     {
-        CreateNotice(Text, 0);
+        UI::Notices::Create(Text, 0);
     }
     else if (Data->Result == 1)
     {
@@ -1865,7 +1950,7 @@ void ReceiveNotice(const BYTE* ReceiveBuffer)
     {
         wchar_t FullText[300] {0};
         mu_swprintf(FullText, I18N::Game::NoticeForGuildMembersS, Text);
-        CreateNotice(FullText, 1);
+        UI::Notices::Create(FullText, 1);
         g_pGuildInfoWindow->AddGuildNotice(Text);
     }
     else if (Data->Result >= 10 && Data->Result <= 15)
@@ -2098,7 +2183,7 @@ BOOL ReceiveTeleport(const BYTE* ReceiveBuffer, BOOL bEncrypted)
             else
             {
                 wchar_t Text[256];
-                mu_swprintf(Text, L"%ls%ls", I18N::Game::WelcomeTo, gMapManager.GetMapName(gMapManager.WorldActive));
+                mu_swprintf(Text, I18N::Game::WelcomeTo, gMapManager.GetMapName(gMapManager.WorldActive));
 
                 g_pSystemLogBox->AddText(Text, SEASON3B::TYPE_SYSTEM_MESSAGE);
             }
@@ -6410,7 +6495,7 @@ void ReceiveBuy(const BYTE* ReceiveBuffer)
         else
         {
 #ifdef _DEBUG
-            __debugbreak();
+            MU_DEBUG_BREAK();
 #endif // _DEBUG
         }
 
@@ -7456,7 +7541,7 @@ void ReceiveGuildBeginWar(const BYTE* ReceiveBuffer)
         EnableSoccer = true;
     }
 
-    CreateNotice(Text, 1);
+    UI::Notices::Create(Text, 1);
     HeroSoccerTeam = Data->Team;
 
     for (int i = 0; i < MARK_EDIT; i++)
@@ -7504,7 +7589,7 @@ void ReceiveGuildEndWar(const BYTE* ReceiveBuffer)
     g_wtMatchTimeLeft.m_Time = 0;
 
 #ifndef GUILD_WAR_EVENT
-    CreateNotice(Text, 1);
+    UI::Notices::Create(Text, 1);
 #endif
 
     EnableGuildWar = false;
@@ -10203,9 +10288,11 @@ void ReceiveQuestByNPCEPList(const BYTE* ReceiveBuffer)
 
 void ReceiveQuestQSSelSentence(const BYTE* ReceiveBuffer)
 {
-    auto pData = (LPPMSG_NPC_QUESTEXP_INFO)ReceiveBuffer;
+    auto pData = (LPPMSG_QUEST_STEP_INFO)ReceiveBuffer;
+    const DWORD dwQuestIndex
+        = (static_cast<DWORD>(pData->m_wQuestGroup) << 16) | pData->m_wQuestStepNumber;
 
-    g_QuestMng.SetCurQuestProgress(pData->m_dwQuestIndex);
+    g_QuestMng.SetCurQuestProgress(dwQuestIndex);
 }
 
 void ReceiveQuestQSRequestReward(const BYTE* ReceiveBuffer)
@@ -10270,6 +10357,7 @@ void ReceiveProgressQuestRequestReward(const BYTE* ReceiveBuffer)
 {
     auto pData = (LPPMSG_NPC_QUESTEXP_INFO)ReceiveBuffer;
     g_QuestMng.SetQuestRequestReward(ReceiveBuffer);
+    g_QuestMng.SetEPRequestRewardState(pData->m_dwQuestIndex, true);
     g_pMyQuestInfoWindow->SetSelQuestRequestReward();
 }
 
@@ -11400,7 +11488,7 @@ void ReceiveBattleCastleProcess(const BYTE* ReceiveBuffer)
     {
         wchar_t Text[100];
         mu_swprintf(Text, I18N::Game::SAllianceIsTryingToRegisterTheOfficialSealNow, guildName);
-        CreateNotice(Text, 1);
+        UI::Notices::Create(Text, 1);
     }
     break;
 
@@ -11409,7 +11497,7 @@ void ReceiveBattleCastleProcess(const BYTE* ReceiveBuffer)
         ChangeBattleFormation(guildName, true);
         wchar_t Text2[100];
         mu_swprintf(Text2, I18N::Game::SGuildHasRegisteredTheOfficialSealSuccessfully, guildName);
-        CreateNotice(Text2, 1);
+        UI::Notices::Create(Text2, 1);
     }
     break;
     }
@@ -13197,6 +13285,11 @@ static void ProcessPacket(const BYTE* ReceiveBuffer, int32_t Size)
         case 0x03: //receive join map server
             if (!ReceiveJoinMapServer(received_span))
             {
+                // safe_cast logged the size mismatch; reiterate the user-visible
+                // symptom so the cause is obvious in the console.
+                g_ConsoleDebug->Write(MCD_ERROR,
+                    L"[ReceiveJoinMapServer] dropped -- protocol state stays REQUEST_JOIN_MAP_SERVER, "
+                    L"main render will not be enabled (loading screen will appear frozen).");
                 //return ( FALSE);
             }
             break;
@@ -13711,8 +13804,20 @@ static void ProcessPacket(const BYTE* ReceiveBuffer, int32_t Size)
         break;
     case 0xF6:
     {
-        auto Data = (LPPHEADER_DEFAULT_SUBCODE)ReceiveBuffer;
-        switch (Data->SubCode)
+        BYTE bySubcode;
+
+        if (bIsC1C3)
+        {
+            auto Data = (LPPHEADER_DEFAULT_SUBCODE)ReceiveBuffer;
+            bySubcode = Data->SubCode;
+        }
+        else
+        {
+            auto Data = (LPPHEADER_DEFAULT_SUBCODE_WORD)ReceiveBuffer;
+            bySubcode = Data->SubCode;
+        }
+
+        switch (bySubcode)
         {
 #ifdef ASG_ADD_TIME_LIMIT_QUEST
         case 0x00:
@@ -14536,7 +14641,10 @@ static void HandleIncomingPacket(int32_t Handle, const BYTE* ReceiveBuffer, int3
     std::copy(ReceiveBuffer, ReceiveBuffer + Size, Packet->ReceiveBuffer.get());
     Packet->Size = Size;
 
-    PostMessage(g_hWnd, WM_RECEIVE_BUFFER, reinterpret_cast<WPARAM>(Packet.release()), 0);
+    // Hand the packet to the main thread for processing. The main loop drains
+    // this queue every frame and calls ProcessPacketCallback. Replaces the old
+    // PostMessage(WM_RECEIVE_BUFFER) round-trip through the Win32 message queue.
+    Network::IncomingPacketQueue::Instance().Push(std::move(Packet));
 }
 
 bool CheckExceptionBuff(eBuffState buff, OBJECT* o, bool iserase)

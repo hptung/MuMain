@@ -3,12 +3,22 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#ifdef _WIN32
 #include <ddraw.h>
 #include <dinput.h>
 #include <dmusicc.h>
 #include <eh.h>
 #include <imagehlp.h>
+#endif
 #include "ErrorReport.h"
+
+// Max UTF-8 bytes for a single log line. Source buffer is wchar_t[1024]; UTF-8 needs
+// up to 3 bytes per BMP character (and 4 bytes per surrogate pair), so a 1024-wchar
+// input expands to at most ~3072 bytes. 4096 gives comfortable margin.
+constexpr int MAX_LOG_LINE_BYTES = 4096;
+// Hex-dump line buffer. Output is pure ASCII (hex digits, spaces, colons, CRLF),
+// so 1 byte per source wchar is sufficient with margin.
+constexpr int MAX_HEX_LINE_BYTES = 512;
 
 void DeleteSocket();
 
@@ -50,12 +60,16 @@ void CErrorReport::Destroy(void)
 
 void CErrorReport::CutHead(void)
 {
+    // Log file is UTF-8. The "###### Log Begin ######" marker is pure ASCII, and UTF-8
+    // preserves ASCII bytes verbatim (no multi-byte sequence starts with a byte < 0x80),
+    // so byte-level strchr/strncmp on '#' reliably locates the marker even if other lines
+    // contain multi-byte sequences.
     DWORD dwNumber;
-    wchar_t lpszBuffer[128 * 1024];
-    ReadFile(m_hFile, lpszBuffer, 128 * 1024 - 1, &dwNumber, NULL);
+    char lpszBuffer[128 * 1024];
+    ReadFile(m_hFile, lpszBuffer, sizeof(lpszBuffer) - 1, &dwNumber, NULL);
     //m_iKey = Xor_ConvertBuffer( lpszBuffer, dwNumber);
     lpszBuffer[dwNumber] = '\0';
-    wchar_t* lpCut = CheckHeadToCut(lpszBuffer, dwNumber);
+    char* lpCut = CheckHeadToCut(lpszBuffer, dwNumber);
     if (dwNumber >= 32 * 1024 - 1)
     {
         lpCut = &lpszBuffer[32 * 1024 - 1];
@@ -65,26 +79,26 @@ void CErrorReport::CutHead(void)
         CloseHandle(m_hFile);
         DeleteFile(m_lpszFileName);
         m_hFile = CreateFile(m_lpszFileName, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        DWORD dwSize = dwNumber - (lpCut - lpszBuffer);
+        DWORD dwSize = dwNumber - static_cast<DWORD>(lpCut - lpszBuffer);
         m_iKey = 0;
         WriteFile(m_hFile, lpCut, dwSize, &dwNumber, NULL);
     }
 }
 
-wchar_t* CErrorReport::CheckHeadToCut( wchar_t* lpszBuffer, DWORD dwNumber)
+char* CErrorReport::CheckHeadToCut(char* lpszBuffer, DWORD dwNumber)
 {
-    const wchar_t* lpszBegin = L"###### Log Begin ######";
-    int iLengthOfBegin = wcslen(lpszBegin);
+    const char* lpszBegin = "###### Log Begin ######";
+    int iLengthOfBegin = static_cast<int>(strlen(lpszBegin));
 
-    wchar_t* lpFoundList[128];
+    char* lpFoundList[128];
     int iFoundCount = 0;
 
-    for (wchar_t* lpFind = lpszBuffer; lpFind && *lpFind; )
+    for (char* lpFind = lpszBuffer; lpFind && *lpFind; )
     {
-        lpFind = wcschr(lpFind, (int)'#');
+        lpFind = strchr(lpFind, '#');
         if (lpFind)
         {
-            if (0 == wcsncmp(lpFind, lpszBegin, iLengthOfBegin))
+            if (0 == strncmp(lpFind, lpszBegin, iLengthOfBegin))
             {
                 lpFoundList[iFoundCount++] = lpFind;
                 lpFind += iLengthOfBegin;
@@ -111,16 +125,24 @@ BOOL CErrorReport::WriteFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesT
 
 void CErrorReport::WriteDebugInfoStr(wchar_t* lpszToWrite)
 {
-    if (m_hFile != INVALID_HANDLE_VALUE)
-    {
-        DWORD dwNumber;
-        WriteFile(m_hFile, lpszToWrite, wcslen(lpszToWrite), &dwNumber, NULL);
+    if (m_hFile == INVALID_HANDLE_VALUE) return;
 
-        if (dwNumber == 0)
-        {
-            CloseHandle(m_hFile);
-            Create(m_lpszFileName);
-        }
+    // Convert UTF-16 wide string to UTF-8 before writing. UTF-8 is portable across
+    // locales (unlike CP_ACP, where the file's bytes depend on the writer's system
+    // codepage -- Shift-JIS on JP Windows, Windows-1252 on EN, etc. -- making logs
+    // collected from different machines ambiguous without knowing each user's locale).
+    char narrowBuf[MAX_LOG_LINE_BYTES];
+    int len = WideCharToMultiByte(CP_UTF8, 0, lpszToWrite, -1, narrowBuf, sizeof(narrowBuf), nullptr, nullptr);
+    // len includes the null terminator. 0 = conversion failed (e.g. ERROR_INSUFFICIENT_BUFFER);
+    // 1 = empty string (only null terminator). Either way, nothing to write.
+    if (len <= 1) return;
+
+    DWORD dwNumber;
+    WriteFile(m_hFile, narrowBuf, len - 1, &dwNumber, NULL);
+    if (dwNumber == 0)
+    {
+        CloseHandle(m_hFile);
+        Create(m_lpszFileName);
     }
 }
 
@@ -139,14 +161,17 @@ void CErrorReport::HexWrite(void* pBuffer, int iSize)
 {
     DWORD dwWritten = 0;
     wchar_t szLine[256] = { 0, };
+    char narrowLine[MAX_HEX_LINE_BYTES];
     int offset = 0;
+    int len = 0;
     offset += mu_swprintf(szLine, L"0x%00000008X : ", (DWORD*)pBuffer);
     for (int i = 0; i < iSize; i++) {
         offset += mu_swprintf(szLine + offset, L"%02X", *((BYTE*)pBuffer + i));
         if (i > 0 && i < iSize - 1) {
             if (i % 16 == 15) {	//. new line
                 offset += mu_swprintf(szLine + offset, L"\r\n");
-                WriteFile(m_hFile, szLine, wcslen(szLine), &dwWritten, NULL);
+                len = WideCharToMultiByte(CP_UTF8, 0, szLine, -1, narrowLine, sizeof(narrowLine), nullptr, nullptr);
+                if (len > 1) WriteFile(m_hFile, narrowLine, len - 1, &dwWritten, NULL);
                 offset = 0;
                 offset += mu_swprintf(szLine + offset, L"           : ");
             }
@@ -156,7 +181,8 @@ void CErrorReport::HexWrite(void* pBuffer, int iSize)
         }
     }
     offset += mu_swprintf(szLine + offset, L"\r\n");
-    WriteFile(m_hFile, szLine, wcslen(szLine), &dwWritten, NULL);
+    len = WideCharToMultiByte(CP_UTF8, 0, szLine, -1, narrowLine, sizeof(narrowLine), nullptr, nullptr);
+    if (len > 1) WriteFile(m_hFile, narrowLine, len - 1, &dwWritten, NULL);
 }
 
 void CErrorReport::AddSeparator(void)
@@ -202,6 +228,44 @@ void CErrorReport::WriteOpenGLInfo(void)
     glGetIntegerv(GL_MAX_VIEWPORT_DIMS, iResult);
     Write(L"Max Viewport size\t: %d x %d\r\n", iResult[0], iResult[1]);
 }
+
+void CErrorReport::WriteFontInfo(void)
+{
+    Write(L"<UI font>\r\n");
+#ifdef _WIN32
+    Write(L"Source\t\t: Win32 GDI (system fonts)\r\n");
+#else
+    // On non-Windows the font is discovered at runtime (fontconfig + fallbacks);
+    // log what was found so a "no UI text" report is diagnosable. Paths are
+    // ASCII, written through the %hs narrow conversion.
+    const std::string diag = MuFontDiagnostics();
+    if (diag.empty())
+    {
+        Write(L"(no font resolved)\r\n");
+    }
+    else
+    {
+        size_t pos = 0;
+        while (pos < diag.size())
+        {
+            const size_t nl = diag.find('\n', pos);
+            const std::string line = diag.substr(pos, (nl == std::string::npos ? diag.size() : nl) - pos);
+            pos = (nl == std::string::npos) ? diag.size() : nl + 1;
+            if (!line.empty())
+                Write(L"%hs\r\n", line.c_str());
+        }
+        if (diag.find("NOT FOUND") != std::string::npos)
+            Write(L"!! UI text is disabled - no usable font found. Install a "
+                  L"sans-serif font or set MU_FONT.\r\n");
+    }
+#endif
+}
+
+// ---- Win32 crash-report system info -----------------------------------------
+// IME / sound-card / OS / CPU / DirectX details for the crash log. These pull in
+// DirectX and other Win32 APIs and are only invoked from the Windows entry point
+// (Winmain), so guard the whole section off on non-Windows (issue #462).
+#ifdef _WIN32
 
 void CErrorReport::WriteImeInfo(HWND hWnd)
 {
@@ -690,3 +754,91 @@ void GetSystemInfo(ER_SystemInfo* si)
     DWORD dwDX = GetDXVersion();
     mu_swprintf(si->m_lpszDxVersion, L"Direct-X %d.%d", dwDX >> 8, dwDX & 0xFF);
 }
+
+#else  // ---- non-Windows ----------------------------------------------------
+
+#include <sys/utsname.h>
+#include <unistd.h>
+#include <climits>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include "Core/Utilities/PlatformInfo.h"   // Core::Platform::GetOSDistroName
+
+// IME is a Windows input service; there is nothing to report elsewhere.
+void CErrorReport::WriteImeInfo(HWND /*hWnd*/)
+{
+}
+
+// Audio runs through SDL; the DirectSound device enumeration has no equivalent.
+void CErrorReport::WriteSoundCardInfo(void)
+{
+    Write(L"<Sound device information>\r\n");
+    Write(L"Description \t\t: SDL audio\r\n");
+}
+
+void GetSystemInfo(ER_SystemInfo* si)
+{
+    ZeroMemory(si, sizeof(ER_SystemInfo));
+
+    // CPU: the first "model name" entry of /proc/cpuinfo.
+    mu_swprintf(si->m_lpszCPU, L"Unknown");
+    if (FILE* f = std::fopen("/proc/cpuinfo", "r"))
+    {
+        char line[256];
+        while (std::fgets(line, sizeof(line), f))
+        {
+            if (std::strncmp(line, "model name", 10) != 0)
+                continue;
+            const char* value = std::strchr(line, ':');
+            if (value)
+            {
+                ++value;
+                while (*value == ' ' || *value == '\t') ++value;
+                char name[MAX_LENGTH_CPUNAME] = { 0 };
+                std::strncpy(name, value, sizeof(name) - 1);
+                if (char* nl = std::strchr(name, '\n')) *nl = '\0';
+                MultiByteToWideChar(CP_UTF8, 0, name, -1, si->m_lpszCPU, MAX_LENGTH_CPUNAME);
+            }
+            break;
+        }
+        std::fclose(f);
+    }
+
+    // Memory: physical RAM in bytes, clamped like the DWORD->int path on Windows.
+    const long long pages    = ::sysconf(_SC_PHYS_PAGES);
+    const long long pageSize = ::sysconf(_SC_PAGE_SIZE);
+    if (pages > 0 && pageSize > 0)
+    {
+        const long long bytes = pages * pageSize;
+        si->m_iMemorySize = (bytes > INT_MAX) ? INT_MAX : static_cast<int>(bytes);
+    }
+
+    // OS: distro (if any) plus the full kernel name and release, e.g.
+    // "Ubuntu 24.04.3 LTS (Linux 6.18.33-...)". The distro tells a dev which
+    // distribution the report came from; the full release keeps WSL/variant
+    // suffixes that uname carries.
+    struct utsname un {};
+    if (::uname(&un) == 0)
+    {
+        char kernel[MAX_LENGTH_OSINFO] = { 0 };
+        std::snprintf(kernel, sizeof(kernel), "%s %s", un.sysname, un.release);
+        wchar_t kernelW[MAX_LENGTH_OSINFO] = { 0 };
+        MultiByteToWideChar(CP_UTF8, 0, kernel, -1, kernelW, MAX_LENGTH_OSINFO);
+
+        const std::wstring distro = Core::Platform::GetOSDistroName();
+        const std::wstring osLine = distro.empty()
+            ? std::wstring(kernelW)
+            : distro + L" (" + kernelW + L")";
+        wcsncpy(si->m_lpszOS, osLine.c_str(), MAX_LENGTH_OSINFO - 1);
+        si->m_lpszOS[MAX_LENGTH_OSINFO - 1] = L'\0';
+    }
+    else
+    {
+        mu_swprintf(si->m_lpszOS, L"Unknown");
+    }
+
+    // No DirectX off Windows; rendering is OpenGL.
+    mu_swprintf(si->m_lpszDxVersion, L"none (OpenGL)");
+}
+#endif // _WIN32 (Win32 crash-report system info)

@@ -78,11 +78,44 @@ endif()
 # Editor mode option (for admin builds)
 option(ENABLE_EDITOR "Enable editor features for admin builds" OFF)
 
+# ---------------------------------------------------------------------------
+# Engine/game code -> static library (libMuClient); MuMain -> thin executable.
+#
+# All engine and game logic compiles into the MuClient static library. The
+# Main executable defined further down contains only the platform entry point
+# (WinMain) and links the library. Keeping the two separated lets unit-test
+# binaries link the same engine code instead of recompiling individual
+# translation units, and stops bootstrap-only code from leaking into the
+# engine (issue #345).
+# ---------------------------------------------------------------------------
+
 # Collect all C++ source files under source/
-file(GLOB_RECURSE MU_MAIN_SOURCES
+file(GLOB_RECURSE MU_CLIENT_SOURCES
   CONFIGURE_DEPENDS
         "source/*.cpp"
 )
+
+# Per-platform entry points (App/Platform/<OS>/Winmain.cpp, main.cpp, main.mm)
+# belong to the executable, not the engine library. Removing them keeps the
+# library free of a WinMain/main() so it can be linked into test binaries that
+# bring their own entry point, and so a non-Windows entry (e.g. Linux main.cpp)
+# does not get globbed into MuClient and collide with the executable's own
+# entry symbol at link time. Match only the Platform/<OS>/ entry-file tail, not
+# an absolute path: a ${CMAKE_CURRENT_SOURCE_DIR}-built path can differ from
+# glob results in drive-letter casing or separators on Windows. This excludes
+# only the entry files; other Platform/<OS>/ sources (e.g. Local.cpp) stay in
+# the library.
+list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]Platform[/\\][^/\\]+[/\\][Ww]in[Mm]ain\\.[Cc]pp$")
+list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]Platform[/\\][^/\\]+[/\\]main\\.(cpp|mm)$")
+
+# The in-game shop's catalog downloader is a WinINet/urlmon HTTP+FTP stack with
+# no portable equivalent yet (issue #462). Exclude just that layer on
+# non-Windows; the rest of the shop (UI, list managers) compiles portably and
+# its download entry points fail gracefully there. Replacing the downloader
+# with libcurl is a follow-up.
+if(NOT WIN32)
+  list(FILTER MU_CLIENT_SOURCES EXCLUDE REGEX "[/\\]GameShop[/\\]FileDownloader[/\\]")
+endif()
 
 # Add MuEditor sources when editor is enabled
 if(ENABLE_EDITOR)
@@ -90,7 +123,7 @@ if(ENABLE_EDITOR)
     CONFIGURE_DEPENDS
     "MuEditor/*.cpp"
   )
-  list(APPEND MU_MAIN_SOURCES ${MU_EDITOR_SOURCES})
+  list(APPEND MU_CLIENT_SOURCES ${MU_EDITOR_SOURCES})
 endif()
 
 # ImGui static library (required when editor is enabled)
@@ -104,7 +137,7 @@ if(ENABLE_EDITOR)
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/imgui_draw.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/imgui_tables.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/imgui_widgets.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/backends/imgui_impl_win32.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/backends/imgui_impl_sdl3.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/backends/imgui_impl_opengl2.cpp"
   )
 
@@ -113,14 +146,86 @@ if(ENABLE_EDITOR)
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imgui/backends"
   )
 
+  # The SDL3 ImGui backend (imgui_impl_sdl3.cpp) needs the SDL3 headers; link the
+  # target so its include dirs propagate (issue #442).
+  target_link_libraries(imgui PUBLIC SDL3::SDL3)
+
+  # The Win32 + OpenGL2 backends call straight into opengl32 (glOrtho,
+  # glShadeModel, ...) and dwmapi. Declaring them as PUBLIC dependencies of
+  # imgui lets CMake place these libraries *after* libimgui.a on the final
+  # link line, which MinGW's order-sensitive linker requires. Restrict to
+  # Windows non-MSVC (MinGW): these are Windows-only libraries, and MSVC links
+  # them elsewhere and ignores order anyway.
+  if (WIN32 AND NOT MSVC)
+    target_link_libraries(imgui PUBLIC opengl32 dwmapi)
+  endif()
+
   # <-- Force C++20 for ImGui here
   target_compile_features(imgui PUBLIC cxx_std_20)
 endif()
 
-add_executable(Main ${MU_MAIN_SOURCES})
+# Engine/game code as a static library. Compile- and link-time usage
+# requirements (C++20, include paths, definitions, third-party libraries) are
+# attached PUBLIC below so both the Main executable and any test binary that
+# links MuClient inherit them automatically.
+add_library(MuClient STATIC ${MU_CLIENT_SOURCES})
+target_compile_features(MuClient PUBLIC cxx_std_20)
 
-# <-- Force C++20 for Main here
+# The engine relies on self-registering globals whose constructors get
+# silently dropped if the linker only pulls archive members on demand, so
+# every consumer must link MuClient with WHOLE_ARCHIVE. Rather than make each
+# consumer remember that, MuClient::MuClient is an interface wrapper that
+# carries the WHOLE_ARCHIVE requirement (and, transitively, all of MuClient's
+# public compile/link properties). Executables and unit tests just link
+# MuClient::MuClient; link the raw MuClient target directly only when an
+# on-demand link is genuinely wanted.
+add_library(MuClient_whole INTERFACE)
+target_link_libraries(MuClient_whole INTERFACE $<LINK_LIBRARY:WHOLE_ARCHIVE,MuClient>)
+add_library(MuClient::MuClient ALIAS MuClient_whole)
+
+# Thin executable: platform bootstrap only, links the engine library. The
+# executable shell's sources live under source/App/ (see issue #346). The entry
+# point is selected per platform (issue #441): each OS keeps its bootstrap under
+# source/App/Platform/<OS>/, so adding a platform is a new entry file plus a
+# branch here, not a CMake rewrite. Only the Windows entry point exists today;
+# the Linux/macOS sources are added when that work starts.
+#
+# Unsupported platforms fail loudly rather than silently selecting the Linux
+# entry: the mobile targets need a different entry model and a renderer port
+# (the engine uses fixed-function desktop OpenGL), so quietly compiling a
+# desktop main() for them would be wrong. iOS is matched before the generic
+# APPLE/macOS branch, and Android before the generic UNIX/Linux branch.
+if (WIN32)
+  set(MU_APP_ENTRY "source/App/Platform/Windows/Winmain.cpp")
+elseif (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  message(FATAL_ERROR "iOS is not a supported build target yet: it needs an "
+    "OpenGL ES/Metal renderer port and a touch UI, and distribution is App "
+    "Store restricted. When that work starts, add source/App/Platform/iOS/ "
+    "and replace this branch.")
+elseif (APPLE)
+  set(MU_APP_ENTRY "source/App/Platform/macOS/main.mm")
+elseif (ANDROID)
+  message(FATAL_ERROR "Android is not a supported build target yet: it needs "
+    "an OpenGL ES renderer port, and its entry point is android_main via "
+    "native_app_glue built as a shared library, not an executable. When that "
+    "work starts, add source/App/Platform/Android/ and replace this branch.")
+elseif (UNIX)
+  # Linux entry (main.cpp) plus the shared bootstrap/game-loop from Winmain.cpp,
+  # which now compiles off Windows (issue #462). main() calls into it.
+  set(MU_APP_ENTRY
+    "source/App/Platform/Linux/main.cpp"
+    "source/App/Platform/Windows/Winmain.cpp")
+else()
+  message(FATAL_ERROR "No executable entry point defined for this platform "
+    "(CMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}). Add source/App/Platform/<OS>/ "
+    "and a branch above.")
+endif()
+
+add_executable(Main
+  "${CMAKE_CURRENT_SOURCE_DIR}/${MU_APP_ENTRY}"
+)
 target_compile_features(Main PUBLIC cxx_std_20)
+target_link_libraries(Main PRIVATE MuClient::MuClient)
 
 if (NOT MSVC)
   set(MU_MAIN_MAP_FILE "${CMAKE_CURRENT_BINARY_DIR}/Main.map")
@@ -141,7 +246,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
 
   enable_language(RC)
   target_sources(Main PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/source/Platform/Windows/resource.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/source/App/Platform/Windows/resource.rc"
   )
 endif()
 
@@ -191,23 +296,151 @@ add_custom_command(TARGET Main POST_BUILD
 # ubiquitous system libraries so we can focus on getting the project to
 # compile; more platform-specific adjustments will follow as we iterate.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_link_libraries(Main PRIVATE
+  # The engine uses fixed-function desktop OpenGL via GLEW; link the system GL
+  # and GLEW so the gl*/glew* symbols resolve in the Linux executable.
+  find_package(OpenGL REQUIRED)
+  find_library(GLEW_LIBRARY NAMES GLEW glew32 REQUIRED)
+  find_library(TURBOJPEG_LIBRARY NAMES turbojpeg REQUIRED)
+  target_link_libraries(MuClient PUBLIC
     pthread
     dl
     m
+    OpenGL::GL
+    OpenGL::GLU
+    ${GLEW_LIBRARY}
+    ${TURBOJPEG_LIBRARY}
   )
 endif()
 
-target_include_directories(Main PRIVATE
+# --- .NET / NuGet infrastructure (shared by wire-sizes codegen and ClientLibrary)
+# Lifted up here so the wire-sizes block below can resolve the OpenMU packet
+# XML from the same NuGet cache the ClientLibrary uses.
+# A Linux target needs the native Linux dotnet to Native-AOT-compile the
+# linux-x64 .so (a Windows dotnet.exe cannot cross-OS AOT). Everything else
+# (Windows/MinGW targets, including from WSL) prefers dotnet.exe so the win-*
+# AOT build works. Pick accordingly.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_program(DOTNET_EXECUTABLE dotnet)
+  if (NOT DOTNET_EXECUTABLE)
+    find_program(DOTNET_EXECUTABLE dotnet.exe)
+  endif()
+else()
+  find_program(DOTNET_EXECUTABLE dotnet.exe)
+  if (NOT DOTNET_EXECUTABLE)
+    find_program(DOTNET_EXECUTABLE dotnet)
+  endif()
+endif()
+
+# Helper macro: convert a path to Windows-native format when using
+# Windows dotnet.exe from WSL. On all other platforms this is a no-op.
+function(mu_native_path input_path output_var)
+  if (DOTNET_EXECUTABLE MATCHES "\\.exe$" AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    execute_process(
+      COMMAND wslpath -w "${input_path}"
+      OUTPUT_VARIABLE native_path
+      RESULT_VARIABLE rc
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if (rc EQUAL 0)
+      set(${output_var} "${native_path}" PARENT_SCOPE)
+    else()
+      message(FATAL_ERROR "wslpath failed for '${input_path}'. Ensure wslpath is available.")
+    endif()
+  else()
+    set(${output_var} "${input_path}" PARENT_SCOPE)
+  endif()
+endfunction()
+
+# NuGet cache: defaults to <project>/.nuget, override with -DMU_NUGET_CACHE_DIR=...
+set(MU_NUGET_CACHE_DIR "${CMAKE_SOURCE_DIR}/.nuget" CACHE PATH "NuGet package cache directory")
+file(MAKE_DIRECTORY "${MU_NUGET_CACHE_DIR}")
+
+# --- Generated wire-size guards ----------------------------------------------
+# tools/gen_wire_sizes.py reads OpenMU's authoritative packet XML and emits
+# wire_sizes.generated.h with static_asserts that lock each client packet
+# struct's sizeof <= the wire length declared by the server. Guards against
+# the PR #402 class of bug (silent #pragma pack drift that freezes the client).
+#
+# The XML lives in the MUnique.OpenMU.Network.Packets NuGet package -- the
+# same package the .NET ClientLibrary consumes (see MUnique.Client.Library.csproj).
+# Sourcing from NuGet means a single versioned dependency instead of vendoring
+# the entire OpenMU repository as a submodule.
+set(OPENMU_PACKETS_VERSION "0.9.9" CACHE STRING
+    "Version of MUnique.OpenMU.Network.Packets to source packet XML from")
+set(OPENMU_PACKETS_XML
+    "${MU_NUGET_CACHE_DIR}/munique.openmu.network.packets/${OPENMU_PACKETS_VERSION}/contentFiles/any/net10.0/ServerToClient/ServerToClientPackets.xml")
+
+# Restore the package on demand at configure time if it isn't cached yet.
+# dotnet restore is fast on cache-hit, so re-configuring stays cheap.
+if (NOT EXISTS "${OPENMU_PACKETS_XML}")
+  if (NOT DOTNET_EXECUTABLE)
+    message(FATAL_ERROR
+      "wire-size codegen needs MUnique.OpenMU.Network.Packets v${OPENMU_PACKETS_VERSION} "
+      "but it is not cached at ${MU_NUGET_CACHE_DIR} and no .NET SDK was found to restore "
+      "it. Install dotnet (Linux or Windows) or pre-populate the NuGet cache.")
+  endif()
+  message(STATUS "Restoring MUnique.OpenMU.Network.Packets v${OPENMU_PACKETS_VERSION} for wire-size codegen...")
+  set(_packets_csproj "${CMAKE_CURRENT_SOURCE_DIR}/../ClientLibrary/MUnique.Client.Library.csproj")
+  mu_native_path("${_packets_csproj}" _packets_csproj_native)
+  mu_native_path("${MU_NUGET_CACHE_DIR}" _packets_nuget_native)
+  # WSLENV=NUGET_PACKAGES/w is needed so the env var crosses the WSL->Windows
+  # interop boundary when DOTNET_EXECUTABLE is dotnet.exe; harmless otherwise.
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} -E env
+            "WSLENV=NUGET_PACKAGES/w"
+            "NUGET_PACKAGES=${_packets_nuget_native}"
+            "${DOTNET_EXECUTABLE}" restore "${_packets_csproj_native}" --nologo
+    RESULT_VARIABLE _restore_rc
+  )
+  if (NOT _restore_rc EQUAL 0)
+    message(FATAL_ERROR "dotnet restore failed (rc=${_restore_rc}) -- see output above.")
+  endif()
+  if (NOT EXISTS "${OPENMU_PACKETS_XML}")
+    message(FATAL_ERROR
+      "dotnet restore completed but ServerToClientPackets.xml is still missing at "
+      "${OPENMU_PACKETS_XML}. Did the NuGet package layout change?")
+  endif()
+endif()
+
+set(WIRE_SIZES_GEN_SCRIPT "${CMAKE_SOURCE_DIR}/tools/gen_wire_sizes.py")
+set(WIRE_SIZES_GEN_HEADER "${CMAKE_BINARY_DIR}/generated/Network/Server/wire_sizes.generated.h")
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_custom_command(
+  OUTPUT "${WIRE_SIZES_GEN_HEADER}"
+  COMMAND "${Python3_EXECUTABLE}" "${WIRE_SIZES_GEN_SCRIPT}"
+          --xml "${OPENMU_PACKETS_XML}"
+          --source-label "MUnique.OpenMU.Network.Packets v${OPENMU_PACKETS_VERSION} (NuGet)"
+          --output "${WIRE_SIZES_GEN_HEADER}"
+  DEPENDS "${WIRE_SIZES_GEN_SCRIPT}" "${OPENMU_PACKETS_XML}"
+  COMMENT "Generating wire_sizes.generated.h from OpenMU NuGet packet XML..."
+  VERBATIM
+)
+add_custom_target(GenWireSizes DEPENDS "${WIRE_SIZES_GEN_HEADER}")
+# WSclient.h includes wire_sizes.generated.h, and WSclient.cpp compiles into the
+# MuClient library, not Main. The codegen ordering must therefore hang off
+# MuClient so the header is generated before any consuming TU compiles.
+# Attaching it to Main only ordered codegen before Main's own link step, which
+# let a parallel `cmake --build build` compile MuClient sources before the
+# header existed and fail (workaround was a manual --target GenWireSizes first).
+add_dependencies(MuClient GenWireSizes)
+
+target_include_directories(MuClient PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/source"
+  # source/App holds the moved PCH header (stdafx.h). Keeping App/ on the
+  # include path lets the ~350 bare #include "stdafx.h" resolve unchanged
+  # after the bootstrap files moved out of source/ (issue #346).
+  "${CMAKE_CURRENT_SOURCE_DIR}/source/App"
   "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/netcore/includes"
+  "${CMAKE_BINARY_DIR}/generated"
+  # stb_truetype backs the portable GDI text rasterizer (issue #462).
+  "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"
   $<$<BOOL:${ENABLE_EDITOR}>:${CMAKE_CURRENT_SOURCE_DIR}/MuEditor>
 )
 
 # Basic compile definitions, roughly mirroring the original MSVC project
 # (fine-tuning per configuration can be done later if needed.)
-target_compile_definitions(Main PRIVATE
+target_compile_definitions(MuClient PUBLIC
   _LANGUAGE_FOREIGN
   _LANGUAGE_ENG
   UNICODE
@@ -218,7 +451,7 @@ target_compile_definitions(Main PRIVATE
 )
 
 if (MSVC)
-  target_compile_definitions(Main PRIVATE
+  target_compile_definitions(MuClient PUBLIC
     WIN32
     _WINDOWS
   )
@@ -231,12 +464,12 @@ if (MSVC)
     set(LIB_ARCH_DIR "x86")
   endif()
 
-  target_link_directories(Main PRIVATE
+  target_link_directories(MuClient PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/lib/${LIB_ARCH_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/lib"  # Fallback for arch-independent libs
   )
 
-  target_link_libraries(Main PRIVATE
+  target_link_libraries(MuClient PUBLIC
     imm32
     vfw32
     dsound
@@ -279,13 +512,8 @@ if (MSVC)
 endif()
 
 # .NET Client Library and tools (platform-agnostic, requires dotnet SDK)
-# Native AOT can only target the OS it runs on, so when cross-compiling from
-# WSL we need the Windows dotnet.exe (available via WSL interop) rather than
-# a Linux dotnet.
-find_program(DOTNET_EXECUTABLE dotnet.exe)
-if (NOT DOTNET_EXECUTABLE)
-  find_program(DOTNET_EXECUTABLE dotnet)
-endif()
+# DOTNET_EXECUTABLE, mu_native_path() and MU_NUGET_CACHE_DIR are already
+# resolved above (shared with the wire-size codegen block).
 if (DOTNET_EXECUTABLE)
   # Native AOT can't cross-compile across OS boundaries: a Linux dotnet
   # targeting win-x86/win-x64 will fail at publish time. Build-time C#
@@ -303,40 +531,23 @@ endif()
 if (DOTNET_EXECUTABLE)
   message(STATUS "Found .NET SDK: ${DOTNET_EXECUTABLE}")
 
-  # Helper macro: convert a path to Windows-native format when using
-  # Windows dotnet.exe from WSL.  On all other platforms this is a no-op.
-  function(mu_native_path input_path output_var)
-    if (DOTNET_EXECUTABLE MATCHES "\\.exe$" AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
-      execute_process(
-        COMMAND wslpath -w "${input_path}"
-        OUTPUT_VARIABLE native_path
-        RESULT_VARIABLE rc
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
-      if (rc EQUAL 0)
-        set(${output_var} "${native_path}" PARENT_SCOPE)
-      else()
-        message(FATAL_ERROR "wslpath failed for '${input_path}'. Ensure wslpath is available.")
-      endif()
-    else()
-      set(${output_var} "${input_path}" PARENT_SCOPE)
-    endif()
-  endfunction()
-
-  # 1. Define the output path using a variable CMake can understand early
-  set(DOTNET_DLL_PATH "${CMAKE_CURRENT_BINARY_DIR}/MUnique.Client.Library.dll")
+  # 1. Define the output path. Native AOT emits a platform-native shared
+  # library: .dll on Windows, .so on Linux (the runtime client dlopen's it by
+  # this name).
+  if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(DOTNET_LIB_NAME "MUnique.Client.Library.so")
+  else()
+    set(DOTNET_LIB_NAME "MUnique.Client.Library.dll")
+  endif()
+  set(DOTNET_DLL_PATH "${CMAKE_CURRENT_BINARY_DIR}/${DOTNET_LIB_NAME}")
   set(DOTNET_PROJ "${CMAKE_CURRENT_SOURCE_DIR}/../ClientLibrary/MUnique.Client.Library.csproj")
 
   # Create temp directories for Native AOT build.
   set(DOTNET_TEMP_OUTPUT "${CMAKE_BINARY_DIR}/dotnet_out")
   set(DOTNET_TEMP_DIR "${CMAKE_BINARY_DIR}/.dotnet_temp")
-
-  # NuGet cache: defaults to <project>/.nuget, override with -DMU_NUGET_CACHE_DIR=...
-  set(MU_NUGET_CACHE_DIR "${CMAKE_SOURCE_DIR}/.nuget" CACHE PATH "NuGet package cache directory")
   set(DOTNET_NUGET_DIR "${MU_NUGET_CACHE_DIR}")
   file(MAKE_DIRECTORY "${DOTNET_TEMP_OUTPUT}")
   file(MAKE_DIRECTORY "${DOTNET_TEMP_DIR}")
-  file(MAKE_DIRECTORY "${DOTNET_NUGET_DIR}")
 
   # Convert paths to Windows-native format for MSBuild (no-op outside WSL).
   mu_native_path("${DOTNET_PROJ}" DOTNET_PROJ_NATIVE)
@@ -349,15 +560,26 @@ if (DOTNET_EXECUTABLE)
 
   # 3. Build to temp directory with Native AOT, then copy to build and bin directories
   # Override environment variables to avoid issues with umlauts in Windows username
-  # Determine runtime identifier and platform target based on architecture
-  if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+  # Determine the runtime identifier from the target OS and pointer width. Native
+  # AOT has no linux-x86 target, so 32-bit is Windows-only.
+  if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(DOTNET_RID "linux-x64")
+    set(DOTNET_PLATFORM "x64")
+    # The PreBuild XSLT step regenerates files using Windows-style backslash
+    # paths and corrupts them on Linux; the generated sources are committed, so
+    # skip it (ci=true) and use the checked-in output.
+    set(DOTNET_EXTRA_ARGS "-p:ci=true")
+    message(STATUS ".NET Client Library will build for linux-x64")
+  elseif (CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(DOTNET_RID "win-x64")
     set(DOTNET_PLATFORM "x64")
-    message(STATUS ".NET Client Library will build for x64 (CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P})")
+    set(DOTNET_EXTRA_ARGS "")
+    message(STATUS ".NET Client Library will build for win-x64 (CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P})")
   else()
     set(DOTNET_RID "win-x86")
     set(DOTNET_PLATFORM "x86")
-    message(STATUS ".NET Client Library will build for x86 (CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P})")
+    set(DOTNET_EXTRA_ARGS "")
+    message(STATUS ".NET Client Library will build for win-x86 (CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P})")
   endif()
 
   if (DOTNET_CAN_BUILD_CLIENT_LIBRARY)
@@ -369,8 +591,8 @@ if (DOTNET_EXECUTABLE)
                     "DOTNET_CLI_HOME=${DOTNET_TEMP_DIR_NATIVE}"
                     "TEMP=${DOTNET_TEMP_DIR_NATIVE}"
                     "TMP=${DOTNET_TEMP_DIR_NATIVE}"
-                    "${DOTNET_EXECUTABLE}" publish "${DOTNET_PROJ_NATIVE}" -c $<CONFIG> -r ${DOTNET_RID} -p:PlatformTarget=${DOTNET_PLATFORM} -o "${DOTNET_TEMP_OUTPUT_NATIVE}" --nologo
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DOTNET_TEMP_OUTPUT}/MUnique.Client.Library.dll" "${DOTNET_DLL_PATH}"
+                    "${DOTNET_EXECUTABLE}" publish "${DOTNET_PROJ_NATIVE}" -c $<CONFIG> -r ${DOTNET_RID} -p:PlatformTarget=${DOTNET_PLATFORM} ${DOTNET_EXTRA_ARGS} -o "${DOTNET_TEMP_OUTPUT_NATIVE}" --nologo
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DOTNET_TEMP_OUTPUT}/${DOTNET_LIB_NAME}" "${DOTNET_DLL_PATH}"
             DEPENDS "${DOTNET_PROJ}" ${DOTNET_SOURCES}
             COMMENT "Checking for .NET Client Library updates..."
             VERBATIM
@@ -458,9 +680,9 @@ if (DOTNET_EXECUTABLE)
     )
 
     add_custom_target(ResxGen DEPENDS ${RESX_GEN_HEADERS} ${RESX_GEN_SOURCES})
-    add_dependencies(Main ResxGen)
-    target_sources(Main PRIVATE ${RESX_GEN_SOURCES})
-    target_include_directories(Main PRIVATE "${CMAKE_BINARY_DIR}/Generated")
+    add_dependencies(MuClient ResxGen)
+    target_sources(MuClient PRIVATE ${RESX_GEN_SOURCES})
+    target_include_directories(MuClient PUBLIC "${CMAKE_BINARY_DIR}/Generated")
   endif()
 else()
   message(WARNING ".NET SDK not found. MUnique.Client.Library.dll will NOT be built. "
@@ -472,7 +694,7 @@ endif()
 # For turbojpeg and wzAudio we link against the logically named libraries,
 # which must be provided as MinGW-compatible .a import libraries.
 if (CMAKE_CXX_COMPILER MATCHES "mingw32" OR CMAKE_CXX_COMPILER MATCHES "w64-mingw32")
-  target_link_directories(Main PRIVATE
+  target_link_directories(MuClient PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/lib"
   )
 
@@ -510,7 +732,7 @@ if (CMAKE_CXX_COMPILER MATCHES "mingw32" OR CMAKE_CXX_COMPILER MATCHES "w64-ming
     message(FATAL_ERROR "Static libturbojpeg not found (libturbojpeg.a) or CMake picked an import library (.dll.a): '${MU_TURBOJPEG_STATIC_LIB}'. Install/build a MinGW-w64 static libjpeg-turbo to avoid shipping libturbojpeg.dll, or set MU_TURBOJPEG_STATIC_LIB to the full path of libturbojpeg.a.")
   endif()
 
-  target_link_libraries(Main PRIVATE
+  target_link_libraries(MuClient PUBLIC
     imm32
     vfw32
     dsound
@@ -536,18 +758,14 @@ if (CMAKE_CXX_COMPILER MATCHES "mingw32" OR CMAKE_CXX_COMPILER MATCHES "w64-ming
 endif()
 
 # Link SDL3 + SDL3_mixer (audio) on all platforms.
-target_link_libraries(Main PRIVATE
+target_link_libraries(MuClient PUBLIC
   SDL3::SDL3
   SDL3_mixer::SDL3_mixer
 )
 
-# Link ImGui for all platforms when editor is enabled
+# Link ImGui for all platforms when editor is enabled. imgui carries its own
+# opengl32/dwmapi link dependencies (see its definition above), so the engine
+# only needs to link the imgui target itself.
 if(ENABLE_EDITOR)
-  target_link_libraries(Main PRIVATE imgui)
-  # MinGW's linker is order-sensitive: opengl32 and dwmapi (needed by ImGui
-  # backends) must appear after the imgui static library.  MSVC already links
-  # these earlier and doesn't care about order.
-  if (NOT MSVC)
-    target_link_libraries(Main PRIVATE opengl32 dwmapi)
-  endif()
+  target_link_libraries(MuClient PUBLIC imgui)
 endif()

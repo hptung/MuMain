@@ -1,8 +1,9 @@
 #include "stdafx.h"
 #include "Audio/AudioPlayer.h"
+#include "Core/Platform/PathResolve.h"
 
 #include "Data/GameConfig/GameConfig.h"
-#include "Platform/Windows/Winmain.h"
+#include "App/Platform/Windows/Winmain.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_mixer/SDL_mixer.h>
@@ -36,7 +37,13 @@ namespace
 
     bool LoadAndStartMusic(const char* path)
     {
+#ifdef _WIN32
         MIX_Audio* audio = MIX_LoadAudio(g_Mixer, path, /*predecode=*/false);
+#else
+        // Music paths are Windows-spelled (backslashes, mixed case); resolve
+        // them against the case-sensitive filesystem.
+        MIX_Audio* audio = MIX_LoadAudio(g_Mixer, MuResolvePath(path).c_str(), /*predecode=*/false);
+#endif
         if (!audio)
             return false;
 

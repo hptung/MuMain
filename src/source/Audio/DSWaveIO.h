@@ -1,7 +1,12 @@
 #pragma once
 
-#include <windows.h>
+#include "Core/Platform/WinCompat.h"
+#ifdef _WIN32
 #include <mmsystem.h>
+#else
+// mmio RIFF reader/writer + wave-format types used by the .cpp; see WinMM.h.
+#include "Core/Platform/WinMM.h"
+#endif
 #include <cstdint>
 
 class waveIO

@@ -6,8 +6,11 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "UI/Chat/Chat.h"
 #include "Core/Globals/_enum.h"
+#ifdef _WIN32
 #include <eh.h>
+#endif
 #include "UI/Legacy/UIManager.h"
 #include "Guild/GuildCache.h"
 #include "Render/Textures/ZzzOpenglUtil.h"
@@ -15,6 +18,7 @@
 #include "Engine/Object/ZzzInfomation.h"
 #include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
+#include "Engine/Object/PlayerActionState.h"
 #include "Render/Terrain/ZzzLodTerrain.h"
 #include "Render/Textures/ZzzTexture.h"
 #include "Engine/AI/ZzzAI.h"
@@ -2570,6 +2574,30 @@ int GetHandOfWeapon(OBJECT* o)
     return (Hand);
 }
 
+namespace
+{
+    // The frame at which an attack animation lands its hit; before this the swing
+    // is still winding up.
+    constexpr float ATTACK_IMPACT_FRAME = 5.f;
+
+    bool IsMonsterAttackAction(const OBJECT* o)
+    {
+        return o->Type >= MODEL_MONSTER01 && o->Type < MODEL_MONSTER_END
+            && o->CurrentAction >= MONSTER01_ATTACK1 && o->CurrentAction <= MONSTER01_ATTACK2;
+    }
+
+    // True once a player or monster swing has reached its impact frame, i.e. the
+    // moment the hit, damage numbers and sound should fire.
+    bool IsAttackImpactFrame(const OBJECT* o)
+    {
+        if (o->AnimationFrame < ATTACK_IMPACT_FRAME)
+            return false;
+
+        const bool bPlayerAttack = o->Type == MODEL_PLAYER && Engine::Object::IsAttackAction(o->CurrentAction);
+        return bPlayerAttack || IsMonsterAttackAction(o);
+    }
+}
+
 bool AttackStage(CHARACTER* c, OBJECT* o)
 {
     // 무기 위치 얻기
@@ -2726,7 +2754,7 @@ bool AttackStage(CHARACTER* c, OBJECT* o)
 
     case    AT_SKILL_PENETRATION:
     case AT_SKILL_PENETRATION_STR:
-        if (o->Type == MODEL_PLAYER && o->CurrentAction >= PLAYER_ATTACK_FIST && o->CurrentAction <= PLAYER_RIDE_SKILL)
+        if (o->Type == MODEL_PLAYER && Engine::Object::IsAttackAction(o->CurrentAction))
         {
             if (o->AnimationFrame >= 5.f)
             {
@@ -2822,8 +2850,7 @@ bool AttackStage(CHARACTER* c, OBJECT* o)
         }
         break;
     case    AT_SKILL_IMPROVE_AG:
-        if (o->AnimationFrame >= 5.f && ((o->Type == MODEL_PLAYER && o->CurrentAction >= PLAYER_ATTACK_FIST && o->CurrentAction <= PLAYER_RIDE_SKILL) ||
-            ((o->Type >= MODEL_MONSTER01 && o->Type < MODEL_MONSTER_END) && o->CurrentAction >= MONSTER01_ATTACK1 && o->CurrentAction <= MONSTER01_ATTACK2)))
+        if (IsAttackImpactFrame(o))
         {
             c->AttackTime = 15;
         }
@@ -3012,8 +3039,7 @@ bool AttackStage(CHARACTER* c, OBJECT* o)
         {
             c->AttackTime = 15;
         }
-        else if (o->AnimationFrame >= 5.f && ((o->Type == MODEL_PLAYER && o->CurrentAction >= PLAYER_ATTACK_FIST && o->CurrentAction <= PLAYER_RIDE_SKILL) ||
-            ((o->Type >= MODEL_MONSTER01 && o->Type < MODEL_MONSTER_END) && o->CurrentAction >= MONSTER01_ATTACK1 && o->CurrentAction <= MONSTER01_ATTACK2)))
+        else if (IsAttackImpactFrame(o))
         {
             int RightType = CharacterMachine->Equipment[EQUIPMENT_WEAPON_RIGHT].Type;
             int LeftType = CharacterMachine->Equipment[EQUIPMENT_WEAPON_LEFT].Type;
@@ -3355,18 +3381,18 @@ void OnlyNpcChatProcess(CHARACTER* c, OBJECT* o)
         case MODEL_MERCHANT_GIRL:
             if (gMapManager.InBattleCastle() == false)
             {
-                CreateChat(c->ID, I18N::Game::FeelTheUnusualForcesAroundTheFortressOfCrywolf, c);
+                UI::Chat::CreateChat(c->ID, I18N::Game::FeelTheUnusualForcesAroundTheFortressOfCrywolf, c);
             }
             break;
         case MODEL_ELF_WIZARD:
-            CreateChat(c->ID, I18N::Game::ThePowerOfTheWolfStatue, c);
+            UI::Chat::CreateChat(c->ID, I18N::Game::ThePowerOfTheWolfStatue, c);
             break;
         case MODEL_MASTER:
-            CreateChat(c->ID, I18N::Game::CrywolfIsAskingForYourHelpOnlyYouCanSaveThisContinent, c);
+            UI::Chat::CreateChat(c->ID, I18N::Game::CrywolfIsAskingForYourHelpOnlyYouCanSaveThisContinent, c);
             break;
         case MODEL_PLAYER:
             if (c->MonsterIndex == MONSTER_ELF_SOLDIER)
-                CreateChat(c->ID, I18N::Game::ILlBeYourStrengthForTheJourneyToBecomeAWarrior, c);
+                UI::Chat::CreateChat(c->ID, I18N::Game::ILlBeYourStrengthForTheJourneyToBecomeAWarrior, c);
             break;
         }
     }
@@ -3426,7 +3452,7 @@ void PlayerNpcStopAnimationSetting(CHARACTER* c, OBJECT* o)
 
         wchar_t szText[512];
         mu_swprintf(szText, I18N::Game::Lookup(TextIndex));
-        CreateChat(c->ID, szText, c);
+        UI::Chat::CreateChat(c->ID, szText, c);
     }
 }
 
@@ -3757,8 +3783,10 @@ void CreateWeaponBlur(CHARACTER* c, OBJECT* o, BMD* b)
                 BlurType = 1;
                 BlurMapping = 2;
             }
-            else if (o->CurrentAction == PLAYER_ATTACK_SKILL_SWORD2 || o->CurrentAction == PLAYER_ATTACK_SKILL_SWORD3 || o->CurrentAction == PLAYER_ATTACK_SKILL_SWORD4)
+            else if (o->CurrentAction == PLAYER_ATTACK_SKILL_SWORD1 || o->CurrentAction == PLAYER_ATTACK_SKILL_SWORD2 || o->CurrentAction == PLAYER_ATTACK_SKILL_SWORD3 || o->CurrentAction == PLAYER_ATTACK_SKILL_SWORD4)
             {
+                // SWORD1 is Falling Slash: it was missing here, so a sword-wielder's Falling Slash
+                // got no trail while Lunge/Uppercut/Cyclone (SWORD2/3/4) and Slash (SWORD5, below) did.
                 BlurType = 1;
                 if (Type == MODEL_LIGHTING_SWORD || Type == MODEL_DARK_REIGN_BLADE || Type == MODEL_RUNE_BLADE)
                     BlurMapping = 1;
@@ -3959,7 +3987,11 @@ void CreateWeaponBlur(CHARACTER* c, OBJECT* o, BMD* b)
             else
             {
                 constexpr float inter = 10.f;
-                const float playSpeed = b->Actions[b->CurrentAction].PlaySpeed * FPS_ANIMATION_FACTOR;
+                // The trail spans backward over one animation slice and lays its points along it.
+                // Scaling that slice by FPS_ANIMATION_FACTOR (REFERENCE_FPS / FPS) collapses it at
+                // high frame rates - the points pile onto a single weapon position and the streak
+                // disappears. Span a fixed PlaySpeed slice so the trail renders the same at any FPS.
+                const float playSpeed = b->Actions[b->CurrentAction].PlaySpeed;
                 float animationFrame = o->AnimationFrame - playSpeed;
                 const float priorAnimationFrame = o->PriorAnimationFrame;
                 const float animationSpeed = playSpeed / inter;
@@ -4855,6 +4887,7 @@ void MoveCharacter(CHARACTER* c, OBJECT* o)
             case AT_SKILL_TRIPLE_SHOT_STR:
             case AT_SKILL_TRIPLE_SHOT_MASTERY:
                 CreateArrows(c, o, NULL, FindHotKey((c->Skill)), 1);
+                break;
             case AT_SKILL_PENETRATION:
             case AT_SKILL_PENETRATION_STR:
                 CreateArrows(c, o, NULL, FindHotKey((c->Skill)), 0, (c->Skill));
@@ -6544,6 +6577,9 @@ void RenderLinkObject(float x, float y, float z, CHARACTER* c, PART_t* f, int Ty
 
     Object->Type = Type;
     ItemObjectAttribute(Object);
+    Object->EnableShadow = o->EnableShadow;
+    Object->m_bRenderShadow = o->m_bRenderShadow;
+    Object->m_bySkillCount = o->m_bySkillCount;
     b->LightEnable = Object->LightEnable;
     b->LightEnable = false;
 
@@ -6850,7 +6886,7 @@ void RenderLinkObject(float x, float y, float z, CHARACTER* c, PART_t* f, int Ty
     }
 
     if ((c->Skill == AT_SKILL_PENETRATION || c->Skill == AT_SKILL_PENETRATION_STR) &&
-        ((o->Type == MODEL_PLAYER && o->CurrentAction >= PLAYER_ATTACK_FIST && o->CurrentAction <= PLAYER_RIDE_SKILL)))
+        ((o->Type == MODEL_PLAYER && Engine::Object::IsAttackAction(o->CurrentAction))))
     {
         if (o->AnimationFrame >= 5.f && o->AnimationFrame <= 10.f)
         {
@@ -6891,6 +6927,11 @@ void RenderLinkObject(float x, float y, float z, CHARACTER* c, PART_t* f, int Ty
         )
     {
         RenderPartObjectEffect(Object, Type, c->Light, o->Alpha, Level, Option1, false, 0, RenderType | ((c->MonsterIndex == MONSTER_METAL_BALROG || c->MonsterIndex == MONSTER_ORC_ARCHER_OF_DOOM) ? (RENDER_EXTRA | RENDER_TEXTURE) : RENDER_TEXTURE));
+    }
+
+    if (Object->EnableShadow)
+    {
+        return;
     }
 
     float Luminosity;
@@ -8241,7 +8282,7 @@ void RenderLinkObject(float x, float y, float z, CHARACTER* c, PART_t* f, int Ty
         }
 
         //model_bow action, frame
-        if (o->CurrentAction >= PLAYER_ATTACK_FIST && o->CurrentAction <= PLAYER_RIDE_SKILL)
+        if (Engine::Object::IsAttackAction(o->CurrentAction))
         {
             Vector(0.2f, 0.8f, 0.5f, vLight);
             for (int i = 0; i < 8; i++)
@@ -8497,8 +8538,9 @@ void RenderCharacter(CHARACTER* c, OBJECT* o, int Select)
                 if (p->Type != -1 && c->SafeZone == false)
                 {
                     int Type = p->Type;
+                    PART_t ShadowPart = *p;
 
-                    RenderPartObject(&c->Object, Type, p, c->Light, o->Alpha, 0, 0, 0, false, false, Translate);
+                    RenderLinkObject(0.f, 0.f, 0.f, c, &ShadowPart, Type, 0, 0, false, Translate);
                 }
             }
             o->EnableShadow = false;
@@ -12089,11 +12131,11 @@ void SetCharacterClass(CHARACTER* c)
     if (gMapManager.InChaosCastle() == true)
         Success = false;
 
-    if (c->Object.CurrentAction >= PLAYER_SIT1 && c->Object.CurrentAction <= PLAYER_POSE_FEMALE1)
+    if (Engine::Object::IsSitOrPoseAction(c->Object.CurrentAction))
     {
         Success = false;
     }
-    if (c->Object.CurrentAction >= PLAYER_ATTACK_FIST && c->Object.CurrentAction <= PLAYER_RIDE_SKILL)
+    if (Engine::Object::IsAttackAction(c->Object.CurrentAction))
     {
         Success = false;
     }
@@ -12197,9 +12239,9 @@ void SetChangeClass(CHARACTER* c)
 
     bool Success = true;
 
-    if (c->Object.CurrentAction >= PLAYER_SIT1 && c->Object.CurrentAction <= PLAYER_POSE_FEMALE1)
+    if (Engine::Object::IsSitOrPoseAction(c->Object.CurrentAction))
         Success = false;
-    if (c->Object.CurrentAction >= PLAYER_ATTACK_FIST && c->Object.CurrentAction <= PLAYER_RIDE_SKILL)
+    if (Engine::Object::IsAttackAction(c->Object.CurrentAction))
         Success = false;
     if (Success)
         SetPlayerStop(c);

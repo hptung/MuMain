@@ -11,6 +11,7 @@
 #include "Engine/Object/ZzzObject.h"
 #include "Engine/Object/ZzzCharacter.h"
 #include "Engine/Object/ZzzInterface.h"
+#include "Network/Reconnect/ReconnectManager.h"
 #include "UI/Legacy/UIControls.h"
 #include "Scenes/SceneCore.h"
 #include "I18N/All.h"
@@ -20,7 +21,9 @@
 
 
 #include "Network/Server/ServerListManager.h"
+#ifdef _WIN32
 #include <dpapi.h>
+#endif
 
 #include "Data/GameConfig/GameConfig.h"
 #include "Data/GameConfig/GameConfigConstants.h"
@@ -149,6 +152,12 @@ void CLoginWin::Show(bool bShow)
         m_aBtn[i].Show(bShow);
     }
     m_aBtnRememberMe.Show(bShow);
+
+    // Drive the text fields' state so a hidden login screen releases keyboard
+    // focus (portable fields stop SDL text input when hidden, #447).
+    const int iState = bShow ? UISTATE_NORMAL : UISTATE_HIDE;
+    if (m_pUsernameInputBox) m_pUsernameInputBox->SetState(iState);
+    if (m_pPasswordInputBox) m_pPasswordInputBox->SetState(iState);
 }
 
 bool CLoginWin::CursorInWin(int nArea)
@@ -268,6 +277,10 @@ void CLoginWin::RequestLogin()
             CurrentProtocolState = REQUEST_LOG_IN;
 
             SocketClient->ToGameServer()->SendLogin(m_Username, m_Password, Version, Serial);
+
+            // Keep the credentials in memory so auto-reconnect can re-login
+            // without prompting after an in-game disconnect.
+            ReconnectManager::Instance().CacheCredentials(m_Username, m_Password);
 
             g_pSystemLogBox->AddText(I18N::Game::VerifyingYourAccount, SEASON3B::TYPE_SYSTEM_MESSAGE);
             g_pSystemLogBox->AddText(I18N::Game::PleaseWait, SEASON3B::TYPE_SYSTEM_MESSAGE);

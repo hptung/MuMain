@@ -496,6 +496,9 @@
     <value>F4 : Größe des Chatfensters anpassen</value>
     <comment>legacy_id=124</comment>
   </data>
+  <data name="F8 - Toggle Monster HP Bar" xml:space="preserve">
+    <value>F8 - Monster-HP-Balken ein/aus</value>
+  </data>
   <data name="F9 - Toggle 3D Camera" xml:space="preserve">
     <value>F9 - 3D-Kamera umschalten</value>
   </data>
@@ -1803,7 +1806,7 @@
     <comment>legacy_id=483</comment>
   </data>
   <data name="Welcome to" xml:space="preserve">
-    <value>Willkommen bei</value>
+    <value>Willkommen bei %s</value>
     <comment>legacy_id=484</comment>
   </data>
   <data name="Of" xml:space="preserve">
